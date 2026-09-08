@@ -145,16 +145,41 @@ export function AlertsSettings() {
   const toast = useStore((s) => s.toast);
   const [s, setS] = useState<Record<string, string> | null>(null);
   const [busy, setBusy] = useState(false);
+  const [found, setFound] = useState<string | null>(null);
   useEffect(() => { api.getSettings().then(setS).catch(() => setS({})); }, []);
   if (!s) return <Card><Spinner /></Card>;
-  const save = async () => { setBusy(true); try { await api.setSetting('telegram_bot_token', s.telegram_bot_token ?? ''); await api.setSetting('telegram_chat_id', s.telegram_chat_id ?? ''); toast('Alert settings saved', 'ok'); } catch (e) { toast((e as Error).message, 'danger'); } finally { setBusy(false); } };
-  const test = async () => { setBusy(true); try { const ok = await api.sendTelegramTest('Pro Aid test message — alerts are working.'); toast(ok ? 'Test sent — check Telegram' : 'Not sent: fill both fields (and Telegram sending needs the live server)', ok ? 'ok' : 'danger'); } catch (e) { toast((e as Error).message, 'danger'); } finally { setBusy(false); } };
+  const token = (s.telegram_bot_token ?? '').trim();
+  const chat = (s.telegram_chat_id ?? '').trim();
+  const tg = async (method: string, body?: Record<string, unknown>) => {
+    const r = await fetch(`https://api.telegram.org/bot${token}/${method}`, body ? { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) } : undefined);
+    const j = await r.json().catch(() => ({ ok: false, description: 'no answer' }));
+    if (!j.ok) throw new Error(j.description === 'Unauthorized' ? 'Token is wrong — copy it again from BotFather' : `Telegram: ${j.description ?? r.status}`);
+    return j.result;
+  };
+  // step 2 done for the owner: read the bot's recent messages and pick the chat that wrote to it
+  const findChat = async () => {
+    if (!token) return toast('Paste the bot token first', 'danger');
+    setBusy(true);
+    try {
+      const updates = await tg('getUpdates') as { message?: { chat: { id: number; first_name?: string; username?: string } } }[];
+      const chats = updates.map((u) => u.message?.chat).filter((c): c is NonNullable<typeof c> => !!c);
+      if (chats.length === 0) throw new Error('No message found yet — open your bot in Telegram, press Start, send it "hi", then try again');
+      const c = chats[chats.length - 1];
+      setS({ ...s, telegram_chat_id: String(c.id) }); setFound(`${c.first_name ?? ''} ${c.username ? '@' + c.username : ''}`.trim());
+      toast(`Found your chat: ${c.first_name ?? c.id}. Now press Save.`, 'ok');
+    } catch (e) { toast((e as Error).message, 'danger'); } finally { setBusy(false); }
+  };
+  const save = async () => { setBusy(true); try { await api.setSetting('telegram_bot_token', token); await api.setSetting('telegram_chat_id', chat); toast('Alert settings saved', 'ok'); } catch (e) { toast((e as Error).message, 'danger'); } finally { setBusy(false); } };
+  const test = async () => {
+    if (!token || !chat) return toast('Token and chat id are both needed', 'danger');
+    setBusy(true);
+    try { await tg('sendMessage', { chat_id: chat, text: 'Pro Aid test message — alerts are working.' }); toast('Sent — check Telegram', 'ok'); } catch (e) { toast((e as Error).message, 'danger'); } finally { setBusy(false); }
+  };
   return <Card title="Owner alerts on Telegram" right={<span className="help">free · instant</span>}>
-    <div className="help">1. In Telegram open <b>@BotFather</b> → /newbot → copy the token. 2. Start a chat with your new bot and send it any message. 3. Open <span className="num">https://api.telegram.org/bot&lt;TOKEN&gt;/getUpdates</span> in a browser and copy the <span className="num">"chat":{'{'}"id":…{'}'}</span> number. Minus closings, duplicate attempts, WAW reminders, anomalies and the morning digest then also arrive on Telegram.</div>
-    <div className="grid grid-2">
-      <Field label="Bot token"><input className="input" value={s.telegram_bot_token ?? ''} onChange={(e) => setS({ ...s, telegram_bot_token: e.target.value })} disabled={!isOwner} placeholder="123456789:AA…" data-testid="tg-token" /></Field>
-      <Field label="Chat id"><input className="input num" value={s.telegram_chat_id ?? ''} onChange={(e) => setS({ ...s, telegram_chat_id: e.target.value })} disabled={!isOwner} placeholder="e.g. 987654321" data-testid="tg-chat" /></Field>
-    </div>
-    {isOwner && <div className="actions"><Button kind="primary" disabled={busy} onClick={save} data-testid="tg-save">Save</Button><Button disabled={busy} onClick={test}>Send test message</Button></div>}
+    <div className="help"><b>1.</b> In Telegram search <b>BotFather</b> → send <span className="num">/newbot</span> → give a name and a username ending in "bot" → copy the <b>token</b> it gives you and paste it below.<br /><b>2.</b> Open your new bot in Telegram, press <b>Start</b>, send it "hi".<br /><b>3.</b> Press <b>Find my chat</b> below, then <b>Save</b>, then <b>Send test message</b>.</div>
+    <Field label="Bot token"><input className="input" value={s.telegram_bot_token ?? ''} onChange={(e) => setS({ ...s, telegram_bot_token: e.target.value })} disabled={!isOwner} placeholder="123456789:AA…" data-testid="tg-token" /></Field>
+    <Field label="Chat id" help={found ? `found: ${found}` : undefined}><div style={{ display: 'flex', gap: 6 }}><input className="input num" value={s.telegram_chat_id ?? ''} onChange={(e) => setS({ ...s, telegram_chat_id: e.target.value })} disabled={!isOwner} placeholder="press Find my chat" data-testid="tg-chat" />{isOwner && <Button disabled={busy || !token} onClick={findChat} data-testid="tg-find">Find my chat</Button>}</div></Field>
+    {isOwner && <div className="actions"><Button kind="primary" disabled={busy} onClick={save} data-testid="tg-save">Save</Button><Button disabled={busy || !token || !chat} onClick={test}>Send test message</Button></div>}
+    <div className="help">Once saved: minus closings, surprise-count minus, duplicate attempts, WAW reminders, anomalies, budget alerts, new-device logins and the morning digest also arrive on Telegram.</div>
   </Card>;
 }

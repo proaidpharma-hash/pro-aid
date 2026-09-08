@@ -3,7 +3,7 @@ import { supabase } from './supabase';
 // ---- types (mirror the database) --------------------------------------------
 export type Role = 'owner' | 'manager' | 'cashier' | 'staff';
 export type Profile = { id: string; name: string; role: Role; phone: string | null; active: boolean; has_login: boolean; created_at: string };
-export type AccountKind = 'cash_drawer' | 'card_machine' | 'wallet' | 'bank' | 'owner_personal' | 'waw_fs';
+export type AccountKind = 'cash_drawer' | 'card_machine' | 'wallet' | 'bank' | 'owner_personal' | 'waw_fs' | 'adjustment';
 export type Account = { id: string; name: string; kind: AccountKind; provider: string | null; active: boolean; sort_order: number };
 export type Distributor = { id: string; name: string; rep_name: string | null; phone: string | null; delivery_days: string | null; opening_balance: number; active: boolean };
 export type DistributorBalance = { id: string; name: string; pending: number; open_invoices: number; oldest_open: string | null; diff_pending: number };
@@ -18,14 +18,14 @@ export type Invoice = { id: string; distributor_id: string; invoice_no: string; 
 export type DiffKind = 'short_items' | 'rate_difference' | 'damaged' | 'other';
 export const DIFF_KIND_LABEL: Record<DiffKind, string> = { short_items: 'Items short', rate_difference: 'Rate difference', damaged: 'Damaged / expired', other: 'Other' };
 export type InvoiceStatus = Invoice & { paid: number; remaining: number; payments_made: number; distributor_name: string; post_diff: number; diff_settled: number; diff_pending: number; unposted_reason_by_name: string | null };
-export type DiffSettlement = { id: string; invoice_id: string; day: string; kind: 'goods_received' | 'credit_note' | 'refund' | 'adjusted'; amount: number; note: string | null; photo_id: string; entered_by: string; device: string | null; created_at: string };
+export type DiffSettlement = { id: string; invoice_id: string; day: string; kind: 'goods_received' | 'credit_note' | 'refund' | 'adjusted'; amount: number; note: string | null; photo_id: string | null; payment_id: string | null; entered_by: string; device: string | null; created_at: string };
 export type ClosingBlocker = { id: string; invoice_no: string; distributor_name: string; amount: number; day: string; unposted_reason: string | null; unposted_reason_day: string | null };
-export type Payment = { id: string; invoice_id: string; day: string; amount: number; account_id: string; cash_source: 'today' | 'yesterday' | 'not_cash'; installment_no: number | null; photo_id: string; requested_by: string | null; entered_by: string; device: string | null; created_at: string };
+export type Payment = { id: string; invoice_id: string; day: string; amount: number; account_id: string; cash_source: 'today' | 'yesterday' | 'not_cash'; installment_no: number | null; photo_id: string | null; note: string | null; adjust_from_invoice_id: string | null; requested_by: string | null; entered_by: string; device: string | null; created_at: string };
 export type Expense = { id: string; day: string; category_id: string; amount: number; note: string | null; account_id: string; cash_source: string; photo_id: string; entered_by: string; device: string | null; created_at: string };
 export type StaffEntryKind = 'advance_sale_cash' | 'advance_purchase_cash' | 'medicine_credit' | 'salary_deduction' | 'cash_repayment';
 export type StaffEntry = { id: string; staff_id: string; day: string; kind: StaffEntryKind; amount: number; bill_total: number | null; bill_no: string | null; note: string | null; photo_id: string; sale_id: string | null; entered_by: string; created_at: string };
 export type StaffBalance = { id: string; name: string; role: Role; has_login: boolean; active: boolean; owed: number };
-export type WawLoan = { id: string; day: string; kind: 'borrow' | 'repay'; amount: number; account_id: string; handled_by: string | null; note: string | null; photo_id: string; entered_by: string; created_at: string };
+export type WawLoan = { id: string; day: string; kind: 'borrow' | 'repay'; amount: number; account_id: string; handled_by: string | null; note: string | null; photo_id: string | null; payment_id: string | null; entered_by: string; created_at: string };
 export type OwnerPaid = { payment_id: string; day: string; amount: number; invoice_id: string; invoice_no: string; distributor_name: string; settled: number; unsettled: number; requested_by: string | null; photo_id: string };
 export type OwnerSettlement = { id: string; payment_id: string; day: string; kind: 'cash_return' | 'minus_receipts'; account_id: string | null; amount: number; photo_id: string; created_at: string };
 export type Closing = { id: string; day: string; expected_cash: number; counted_cash: number; difference: number; drawer_photo_id: string; note: string | null; denominations: Record<string, number> | null; closed_by: string; device: string | null; created_at: string };
@@ -136,9 +136,10 @@ export const listPayments = async (filter: { invoice_id?: string; distributor_id
   if (filter.to) q = q.lte('day', filter.to);
   return (must(await q) as Payment[]).map((p) => numify(p, ['amount']));
 };
+export const setInvoiceDue = async (invoiceId: string, due: string) => must(await supabase.rpc('set_invoice_due', { p_invoice: invoiceId, p_due: due }));
 export const paymentWarning = async (invoiceId: string, amount: number, day: string) => (await supabase.rpc('payment_warning', { p_invoice: invoiceId, p_amount: amount, p_day: day })).data as string | null;
-export async function recordPayment(p: { invoice_id: string; day: string; amount: number; account_id: string; cash_source: 'today' | 'yesterday' | 'not_cash'; photo_id: string; requested_by?: string | null }) {
-  const r = must(await supabase.rpc('record_payment', { p_invoice: p.invoice_id, p_day: p.day, p_amount: p.amount, p_account: p.account_id, p_cash_source: p.cash_source, p_photo: p.photo_id, p_requested_by: p.requested_by ?? null })) as { blocked: boolean; code?: string; message?: string; payment?: Payment };
+export async function recordPayment(p: { invoice_id: string; day: string; amount: number; account_id: string; cash_source: 'today' | 'yesterday' | 'not_cash'; photo_id: string | null; requested_by?: string | null; note?: string | null; adjust_from_invoice_id?: string | null }) {
+  const r = must(await supabase.rpc('record_payment', { p_invoice: p.invoice_id, p_day: p.day, p_amount: p.amount, p_account: p.account_id, p_cash_source: p.cash_source, p_photo: p.photo_id, p_requested_by: p.requested_by ?? null, p_note: p.note ?? null, p_adjust_from: p.adjust_from_invoice_id ?? null })) as { blocked: boolean; code?: string; message?: string; payment?: Payment };
   if (r.blocked) throw new ApiError(r.message || 'Payment blocked', r.code);
   return r.payment as Payment;
 }
@@ -201,4 +202,4 @@ export const auditLog = async (from: string, to: string, limit = 2000) => {
   return must(await supabase.from('audit_log').select('*').gte('at', `${from}T00:00:00`).lt('at', `${end.toISOString().slice(0, 10)}T00:00:00`).order('at', { ascending: false }).limit(limit)) as AuditRow[];
 };
 export const getPhoto = async (id: string) => (await supabase.from('photos').select('*').eq('id', id).maybeSingle()).data as Photo | null;
-export const getPhotos = async (ids: string[]) => (ids.length ? (must(await supabase.from('photos').select('*').in('id', ids)) as Photo[]) : []);
+export const getPhotos = async (ids: (string | null | undefined)[]) => { const clean = ids.filter((x): x is string => !!x); return clean.length ? (must(await supabase.from('photos').select('*').in('id', clean)) as Photo[]) : []; };

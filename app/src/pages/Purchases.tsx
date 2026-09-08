@@ -4,6 +4,7 @@ import { TopBar } from '../components/Shell';
 import { Card, Field, AmountInput, amountOf, PhotoPicker, Button, Notice, Spinner, Pill, ProofLink, Chips, Empty, Sheet } from '../components/ui';
 import { useStore, useIsManagerOrOwner, useIsOwner } from '../lib/store';
 import * as api from '../lib/api';
+import { PaymentLinesEditor, useSourceOptions, paymentLinesTotal, paymentLinesProblem, postPaymentLines, newLine, type PaymentLine } from '../components/PaymentLines';
 import { PostedSheet } from '../components/Posting';
 import { today, fmtDay, num, fmtShort, initials } from '../lib/format';
 import type { ProofPhoto } from '../lib/photos';
@@ -82,20 +83,33 @@ export function PurchaseNew() {
   const [nInst, setNInst] = useState('3');
   const [nextDue, setNextDue] = useState('');
   const [payNow, setPayNow] = useState<'pending' | 'now'>('pending');
+  const [lines, setLines] = useState<PaymentLine[]>([newLine()]);
+  const [dueDate, setDueDate] = useState('');
   const [note, setNote] = useState('');
   const [busy, setBusy] = useState(false);
   const [newDist, setNewDist] = useState(false);
   const [newDistName, setNewDistName] = useState('');
   useEffect(() => { api.listDistributors().then(setDists).catch((e) => toast(e.message, 'danger')); }, [toast]);
   const amt = amountOf(amount);
-  const canSave = distId && invoiceNo.trim() && amt > 0 && photo && posted !== null && !busy && (plan === 'full' || Number(nInst) >= 2);
+  const options = useSourceOptions(distId || null, null);
+  const linesProblem = payNow === 'now' ? paymentLinesProblem(lines, options, amt) : null;
+  const canSave = distId && invoiceNo.trim() && amt > 0 && photo && posted !== null && !busy && (plan === 'full' || Number(nInst) >= 2) && !linesProblem;
   const save = async () => {
     if (!canSave || !photo) return;
     setBusy(true);
     try {
       const inv = await api.addInvoice({ distributor_id: distId, invoice_no: invoiceNo.trim(), day, amount: amt, photo_id: photo.id, invoice_date: invoiceDate || null, installments_planned: plan === 'installments' ? Number(nInst) : null, next_due: plan === 'installments' && nextDue ? nextDue : null, note: note || null, posted_in_pos: posted === 'yes' });
-      toast('Purchase saved', 'ok'); useStore.getState().bump();
-      navigate(payNow === 'now' ? `/pay?invoice=${inv.id}` : '/purchases');
+      if (payNow !== 'now') { toast('Purchase saved', 'ok'); useStore.getState().bump(); navigate('/purchases'); return; }
+      let saved = 0;
+      try {
+        saved = await postPaymentLines(inv.id, day, lines, options, profile.id);
+        const left = amt - paymentLinesTotal(lines);
+        if (left > 0 && dueDate) await api.setInvoiceDue(inv.id, dueDate);
+        toast(left > 0 ? `Purchase saved · ${num(amt - left)} paid, ${num(left)} pending` : 'Purchase saved and paid', 'ok'); useStore.getState().bump(); navigate(`/distributors/${distId}`);
+      } catch (e) {
+        toast(`Purchase saved, but payment: ${(e as Error).message}${saved > 0 ? ` (${saved} of ${lines.length} lines saved)` : ''}`, 'danger');
+        useStore.getState().bump(); navigate(`/pay?invoice=${inv.id}`);
+      }
     } catch (e) { toast((e as Error).message, 'danger'); } finally { setBusy(false); }
   };
   const addDist = async () => { if (!newDistName.trim()) return; try { const d = await api.addDistributor({ name: newDistName.trim() }); setDists((x) => [...x, d].sort((a, b) => a.name.localeCompare(b.name))); setDistId(d.id); setNewDist(false); setNewDistName(''); } catch (e) { toast((e as Error).message, 'danger'); } };
@@ -108,7 +122,7 @@ export function PurchaseNew() {
           <div className="grid grid-2">
             <Field label="Invoice no"><input className="input num" value={invoiceNo} onChange={(e) => setInvoiceNo(e.target.value)} data-testid="invoice-no" /></Field>
             <Field label="Invoice total"><AmountInput id="invoice-amount" big={false} value={amount} onChange={setAmount} /></Field>
-            <Field label="Received on"><input className="input" type="date" value={day} max={today()} onChange={(e) => setDay(e.target.value)} /></Field>
+            <Field label="Received on"><input className="input" type="date" value={day} max={today()} onChange={(e) => setDay(e.target.value)} data-testid="received-on" /></Field>
             <Field label="Invoice date (optional)"><input className="input" type="date" value={invoiceDate} onChange={(e) => setInvoiceDate(e.target.value)} /></Field>
           </div>
           <PhotoPicker label="Invoice photo" hint="The distributor's invoice — camera or gallery" value={photo} onChange={setPhoto} userId={profile.id} />
@@ -119,10 +133,14 @@ export function PurchaseNew() {
         </Card>
         <Card title="Payment">
           <Chips options={[{ value: 'pending', label: 'Leave pending' }, { value: 'now', label: 'Pay now (on the spot)' }]} value={payNow} onChange={setPayNow} />
-          <Chips options={[{ value: 'full', label: 'Single payment' }, { value: 'installments', label: 'In installments' }]} value={plan} onChange={setPlan} />
+          {payNow === 'pending' && <Chips options={[{ value: 'full', label: 'Single payment' }, { value: 'installments', label: 'In installments' }]} value={plan} onChange={setPlan} />}
           {plan === 'installments' && <div className="grid grid-2"><Field label="How many installments"><input className="input num" inputMode="numeric" value={nInst} onChange={(e) => setNInst(e.target.value.replace(/\D/g, ''))} /></Field><Field label="First due date"><input className="input" type="date" value={nextDue} onChange={(e) => setNextDue(e.target.value)} /></Field></div>}
           <Field label="Note (optional)"><input className="input" value={note} onChange={(e) => setNote(e.target.value)} /></Field>
         </Card>
+        {payNow === 'now' && (amt > 0 ? <>
+          <div className="help">Paying {num(amt)} now — from one source or several. Anything left stays pending on the invoice.</div>
+          <PaymentLinesEditor lines={lines} onChange={setLines} options={options} remaining={amt} userId={profile.id} day={day} dueDate={dueDate} onDueDate={setDueDate} />
+        </> : <Notice kind="info">Enter the invoice total first, then the payment sources appear here.</Notice>)}
         <div className="form-footer"><Button kind="primary" size="big" disabled={!canSave} onClick={save} data-testid="save-purchase">{busy ? 'Saving…' : payNow === 'now' ? 'Save & pay now' : 'Save purchase'}</Button></div>
       </div></div>
       {newDist && <Sheet title="New distributor" onClose={() => setNewDist(false)}><Field label="Name"><input className="input" autoFocus value={newDistName} onChange={(e) => setNewDistName(e.target.value)} /></Field><div className="actions"><Button onClick={() => setNewDist(false)}>Cancel</Button><Button kind="primary" onClick={addDist}>Add</Button></div></Sheet>}
@@ -133,7 +151,6 @@ export function PurchaseNew() {
 // Pay a distributor against an invoice — the cashier's main screen.
 export function PayPage() {
   const profile = useStore((s) => s.profile)!;
-  const accounts = useStore((s) => s.accounts);
   const toast = useStore((s) => s.toast);
   const navigate = useNavigate();
   const [params] = useSearchParams();
@@ -141,10 +158,8 @@ export function PayPage() {
   const [distId, setDistId] = useState('');
   const [invoices, setInvoices] = useState<api.InvoiceStatus[]>([]);
   const [invoiceId, setInvoiceId] = useState(params.get('invoice') || '');
-  const [amount, setAmount] = useState('');
-  const [accountId, setAccountId] = useState('');
-  const [cashSource, setCashSource] = useState<'today' | 'yesterday'>('today');
-  const [photo, setPhoto] = useState<ProofPhoto | null>(null);
+  const [lines, setLines] = useState<PaymentLine[]>([newLine()]);
+  const [dueDate, setDueDate] = useState('');
   const [day, setDay] = useState(today());
   const [warning, setWarning] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -152,48 +167,39 @@ export function PayPage() {
   useEffect(() => { if (params.get('invoice')) api.getInvoice(params.get('invoice')!).then((i) => { setDistId(i.distributor_id); setInvoiceId(i.id); }).catch(() => undefined); }, [params]);
   useEffect(() => { if (distId) api.invoiceStatus({ distributor_id: distId, unpaid: true }).then(setInvoices); else setInvoices([]); }, [distId]);
   const inv = invoices.find((i) => i.id === invoiceId) || null;
-  const amt = amountOf(amount);
-  const account = accounts.find((a) => a.id === accountId);
-  useEffect(() => { if (inv && amt > 0) api.paymentWarning(inv.id, amt, day).then(setWarning).catch(() => setWarning(null)); else setWarning(null); }, [inv, amt, day]);
-  const over = inv ? amt > inv.remaining : false;
-  const canSave = inv && amt > 0 && !over && account && photo && !busy;
+  const options = useSourceOptions(inv?.distributor_id ?? null, inv?.id ?? null);
+  const total = paymentLinesTotal(lines);
+  useEffect(() => { if (inv && total > 0) api.paymentWarning(inv.id, total, day).then(setWarning).catch(() => setWarning(null)); else setWarning(null); }, [inv, total, day]);
+  const problem = inv ? paymentLinesProblem(lines, options, inv.remaining) : 'Choose an invoice';
+  const canSave = inv && !problem && !busy;
   const save = async () => {
-    if (!canSave || !inv || !photo || !account) return;
+    if (!canSave || !inv) return;
     setBusy(true);
+    let saved = 0;
     try {
-      await api.recordPayment({ invoice_id: inv.id, day, amount: amt, account_id: account.id, cash_source: account.kind === 'cash_drawer' ? cashSource : 'not_cash', photo_id: photo.id, requested_by: account.kind === 'owner_personal' ? profile.id : null });
-      toast('Payment saved', 'ok'); useStore.getState().bump(); navigate(`/distributors/${inv.distributor_id}`);
-    } catch (e) { toast((e as Error).message, 'danger'); } finally { setBusy(false); }
+      saved = await postPaymentLines(inv.id, day, lines, options, profile.id);
+      const left = inv.remaining - total;
+      if (left > 0 && dueDate) await api.setInvoiceDue(inv.id, dueDate);
+      toast(lines.length > 1 ? `${lines.length} payment lines saved` : 'Payment saved', 'ok'); useStore.getState().bump(); navigate(`/distributors/${inv.distributor_id}`);
+    } catch (e) {
+      toast(`${(e as Error).message}${saved > 0 ? ` — ${saved} of ${lines.length} lines were saved; the rest were not` : ''}`, 'danger');
+      useStore.getState().bump();
+    } finally { setBusy(false); }
   };
-  const sources = accounts.filter((a) => a.kind !== 'waw_fs');
   return (
     <>
       <TopBar title="Pay distributor" sub={`${profile.role === 'cashier' ? 'Cashier' : profile.role === 'manager' ? 'Manager' : 'Owner'}: ${profile.name}`} back />
       <div className="content"><div className="form">
         <Card>
-          <Field label="Distributor"><select className="select" value={distId} onChange={(e) => { setDistId(e.target.value); setInvoiceId(''); }} data-testid="pay-distributor"><option value="">Choose…</option>{dists.map((d) => <option key={d.id} value={d.id}>{d.name}{d.pending > 0 ? ` · pending ${num(d.pending)}` : ''}</option>)}</select></Field>
-          {distId && (invoices.length === 0 ? <Notice kind="info">No unpaid invoices for this distributor. <Link to={`/purchases/new?distributor=${distId}`}>Add the invoice first</Link> — stock received today is entered as a purchase, then paid.</Notice> : <Field label="Invoice"><select className="select" value={invoiceId} onChange={(e) => setInvoiceId(e.target.value)} data-testid="pay-invoice"><option value="">Choose…</option>{invoices.map((i) => <option key={i.id} value={i.id}>Inv {i.invoice_no} · {fmtShort(i.day)} · {num(i.remaining)} remaining of {num(i.amount)}</option>)}</select></Field>)}
+          <Field label="Distributor"><select className="select" value={distId} onChange={(e) => { setDistId(e.target.value); setInvoiceId(''); }} data-testid="pay-distributor"><option value="">Choose…</option>{dists.map((d) => <option key={d.id} value={d.id}>{d.name}{d.pending > 0 ? ` · pending ${num(d.pending)}` : ''}{d.diff_pending > 0 ? ` · they owe ${num(d.diff_pending)}` : ''}</option>)}</select></Field>
+          {distId && (invoices.length === 0 ? <Notice kind="info">No unpaid invoices for this distributor. <Link to={`/purchases/new?distributor=${distId}`}>Add the invoice first</Link> — stock received today is entered as a purchase, then paid.</Notice> : <Field label="Invoice"><select className="select" value={invoiceId} onChange={(e) => setInvoiceId(e.target.value)} data-testid="pay-invoice"><option value="">Choose…</option>{invoices.map((i) => <option key={i.id} value={i.id}>Inv {i.invoice_no} · {fmtShort(i.day)} · {num(i.amount)} · {num(i.remaining)} remaining</option>)}</select></Field>)}
           {inv && <Notice kind="ok">Invoice found · paid {num(inv.paid)}{inv.installments_planned ? ` (${inv.payments_made} of ${inv.installments_planned})` : inv.payments_made > 0 ? ` (${inv.payments_made} payment${inv.payments_made > 1 ? 's' : ''})` : ''} · {num(inv.remaining)} remaining{inv.next_due ? ` · next due ${fmtShort(inv.next_due)}` : ''}. A fully paid invoice number is blocked (duplicate guard).</Notice>}
         </Card>
         {inv && <>
-          <Card>
-            <div className="grid grid-2">
-              <Field label="Paying now"><AmountInput id="pay-amount" value={amount} onChange={setAmount} error={over} /></Field>
-              <Field label="Status after"><div className={`notice ${over ? 'danger' : amt >= inv.remaining && amt > 0 ? 'ok' : 'warn'}`} style={{ height: 56 }}>{over ? `Exceeds remaining ${num(inv.remaining)}` : amt <= 0 ? '—' : amt >= inv.remaining ? 'Fully paid' : `${inv.installments_planned ? `Installment ${inv.payments_made + 1} of ${inv.installments_planned} · ` : ''}${num(inv.remaining - amt)} left after`}</div></Field>
-            </div>
-            <div className="chips"><button type="button" className="chip" onClick={() => setAmount(String(inv.remaining))}>Full {num(inv.remaining)}</button>{inv.installments_planned && inv.installments_planned > inv.payments_made && <button type="button" className="chip" onClick={() => setAmount(String(Math.round(inv.remaining / (inv.installments_planned! - inv.payments_made))))}>Installment {num(Math.round(inv.remaining / (inv.installments_planned - inv.payments_made)))}</button>}</div>
-            <Field label="Paid from">
-              <div className="tiles">{sources.map((a) => <button type="button" key={a.id} className={`tile ${accountId === a.id ? 'on' : ''}`} onClick={() => setAccountId(a.id)} data-testid={`source-${a.kind}`}><b>{a.kind === 'cash_drawer' ? 'Cash drawer' : a.kind === 'owner_personal' ? "Owner's personal account" : a.name}</b><span>{a.kind === 'cash_drawer' ? "today's or yesterday's sale cash" : a.kind === 'owner_personal' ? 'owner pays, pharmacy owes him' : a.kind === 'card_machine' ? 'settled to bank' : 'pharmacy account'}</span></button>)}</div>
-            </Field>
-            {account?.kind === 'cash_drawer' && <Chips options={[{ value: 'today', label: "Today's cash" }, { value: 'yesterday', label: "Yesterday's cash" }]} value={cashSource} onChange={setCashSource} />}
-            <Field label="Payment date"><input className="input" type="date" value={day} max={today()} onChange={(e) => setDay(e.target.value)} /></Field>
-          </Card>
-          <Card>
-            <PhotoPicker label={account && account.kind !== 'cash_drawer' ? 'Transfer screenshot' : 'Invoice / receipt photo'} hint={account && account.kind !== 'cash_drawer' ? 'Screenshot of the bank or wallet transfer' : 'Signed invoice or the distributor receipt'} value={photo} onChange={setPhoto} userId={profile.id} />
-          </Card>
+          <Field label="Payment date"><input className="input" type="date" value={day} max={today()} onChange={(e) => setDay(e.target.value)} style={{ maxWidth: 220 }} data-testid="payment-date" /></Field>
+          <PaymentLinesEditor lines={lines} onChange={setLines} options={options} remaining={inv.remaining} userId={profile.id} day={day} dueDate={dueDate} onDueDate={setDueDate} />
           {warning && <Notice kind="warn">{warning}. Check you are not paying twice.</Notice>}
-          {account?.kind === 'owner_personal' && <Notice kind="info">The owner will be notified. This invoice goes to the "paid from owner's account" list until it is settled.</Notice>}
-          <div className="form-footer"><Button kind="primary" size="big" disabled={!canSave} onClick={save} data-testid="save-payment">{busy ? 'Saving…' : 'Save payment'}</Button></div>
+          <div className="form-footer"><Button kind="primary" size="big" disabled={!canSave} onClick={save} data-testid="save-payment">{busy ? 'Saving…' : total > 0 && total < inv.remaining ? `Save · ${num(total)} now, ${num(inv.remaining - total)} pending` : 'Save payment'}</Button></div>
         </>}
       </div></div>
     </>

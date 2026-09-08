@@ -421,6 +421,38 @@ select t_ok((select encrypted_password = crypt('abcdefghijklmnopqrstuvwxyz012345
 -- anonymous role: only the setup check is callable
 select t_ok(has_function_privilege('anon', 'setup_needed()', 'execute'), 'anon may check setup');
 select t_ok(not has_function_privilege('anon', 'cash_book(date)', 'execute') and not has_function_privilege('anon', 'notify_users(uuid[], notification_kind, text, text, text, uuid)', 'execute') and not has_function_privilege('anon', 'range_summary(date, date)', 'execute'), 'anon cannot call the API');
-select t_ok(not has_function_privilege('authenticated', 'record_payment_impl(uuid, date, numeric, uuid, cash_source, uuid, uuid)', 'execute'), 'internal implementations are not callable');
+select t_ok(not has_function_privilege('authenticated', 'record_payment_impl(uuid, date, numeric, uuid, cash_source, uuid, uuid, text, uuid)', 'execute'), 'internal implementations are not callable');
 select t_ok((select bool_and(relrowsecurity) from pg_class where relnamespace = 'public'::regnamespace and relkind = 'r'), 'row-level security is on for every table');
 select 'ALL RULE TESTS PASSED (incl. security)' as result;
+
+-- ---------------------------------------------------------------------------
+-- 13. one invoice, several sources: owner account + WAW loan + adjustment + pending due date
+-- ---------------------------------------------------------------------------
+set role app_user;
+select t_as(:manager);
+insert into invoices(distributor_id, invoice_no, day, amount, photo_id) values ((select id from distributors where name='Getz Pharma'), '77001', '2026-09-13', 10000, t_photo(:manager));
+insert into invoices(distributor_id, invoice_no, day, amount, photo_id) values ((select id from distributors where name='Getz Pharma'), '77002', '2026-09-13', 5000, t_photo(:manager));
+insert into invoices(distributor_id, invoice_no, day, amount, photo_id) values ((select id from distributors where name='Muller & Phipps'), '77003', '2026-09-13', 8000, t_photo(:manager));
+select mark_posted((select id from invoices where invoice_no='77001'), 9000, 'short_items', 'one pack missing');
+select t_ok((select diff_pending from v_invoice_status where invoice_no='77001') = 1000, 'invoice 77001 carries a 1,000 difference');
+-- 77002 (5,000): 1,000 adjusted against the 77001 difference, 2,500 from WAW F/S, rest pending
+select t_expect_error($q$ select record_payment((select id from invoices where invoice_no='77002'), '2026-09-13', 1000, (select id from accounts where kind::text='adjustment'), 'not_cash', null, null, null, null) $q$, 'PA060', 'adjustment needs the source invoice');
+select t_expect_error($q$ select record_payment((select id from invoices where invoice_no='77002'), '2026-09-13', 1000, (select id from accounts where kind::text='adjustment'), 'not_cash', null, null, null, (select id from invoices where invoice_no='77003')) $q$, 'PA060', 'adjustment must be the same distributor');
+select t_expect_error($q$ select record_payment((select id from invoices where invoice_no='77002'), '2026-09-13', 1500, (select id from accounts where kind::text='adjustment'), 'not_cash', null, null, null, (select id from invoices where invoice_no='77001')) $q$, 'PA061', 'cannot adjust more than the pending difference');
+select t_ok((record_payment((select id from invoices where invoice_no='77002'), '2026-09-13', 1000, (select id from accounts where kind::text='adjustment'), 'not_cash', null, null, 'short pack from last week', (select id from invoices where invoice_no='77001')))->>'blocked' = 'false', 'adjustment line saved without a photo');
+select t_ok((select diff_pending from v_invoice_status where invoice_no='77001') = 0 and (select count(*) from invoice_diff_settlements where kind='adjusted' and payment_id is not null) = 1, 'the difference is settled by the adjustment');
+select t_ok((select count(*) from payments where invoice_id = (select id from invoices where invoice_no='77002') and note = 'short pack from last week') = 1, 'payment note is stored');
+select t_expect_error($q$ select record_payment((select id from invoices where invoice_no='77002'), '2026-09-13', 2500, (select id from accounts where kind='waw_fs'), 'not_cash', null) $q$, '23514', 'a WAW line needs its proof photo');
+select set_config('t.waw_before', waw_outstanding()::text, false);
+select t_ok((record_payment((select id from invoices where invoice_no='77002'), '2026-09-13', 2500, (select id from accounts where kind='waw_fs'), 'not_cash', t_photo(:manager), null, 'rep Kamran, transferred by WAW'))->>'blocked' = 'false', 'WAW F/S line saved');
+select t_ok(waw_outstanding() = current_setting('t.waw_before')::numeric + 2500, 'WAW loan booked automatically for the WAW line');
+select t_ok((select count(*) from waw_loans where payment_id is not null and kind='borrow' and amount=2500) = 1, 'the booked loan points at the payment');
+select t_ok((select remaining from v_invoice_status where invoice_no='77002') = 1500, '1,500 still pending on 77002');
+select set_invoice_due((select id from invoices where invoice_no='77002'), '2026-09-20');
+select t_ok((select next_due from invoices where invoice_no='77002') = '2026-09-20' and (select count(*) from reminders where invoice_id=(select id from invoices where invoice_no='77002') and done_at is null and amount=1500 and repeat_daily) = 1, 'due date set with a daily reminder for the remainder');
+select t_ok((record_payment((select id from invoices where invoice_no='77002'), '2026-09-13', 1500, (select id from accounts where kind='owner_personal'), 'not_cash', t_photo(:manager)))->>'blocked' = 'false', 'remainder paid from the owner account');
+select t_ok((select count(*) from reminders where invoice_id=(select id from invoices where invoice_no='77002') and done_at is null) = 0, 'reminder closes itself once fully paid');
+select t_ok((select expected_cash from cash_book('2026-09-13')) = (select opening_cash from business_days where day='2026-09-13'), 'none of these lines touched the drawer');
+select t_expect_error($q$ select set_invoice_due((select id from invoices where invoice_no='77002'), '2026-09-21') $q$, 'PA062', 'no due date on a fully paid invoice');
+reset role;
+select 'ALL RULE TESTS PASSED (incl. multi-source payments)' as result;

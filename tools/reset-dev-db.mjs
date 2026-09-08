@@ -10,7 +10,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const db = process.argv[2] || 'proaid_dev';
 const P = 'psql -h /tmp -p 5433 -U postgres';
 execSync(`${P} -q -c "drop database if exists ${db}" -c "create database ${db}"`, { stdio: 'inherit' });
-execSync(`${P} -d ${db} -v ON_ERROR_STOP=1 -q -f ${root}/supabase/tests/00_auth_stub.sql -f ${root}/supabase/migrations/0001_schema.sql -f ${root}/supabase/migrations/0002_api.sql -f ${root}/supabase/migrations/0004_bootstrap.sql -f ${root}/supabase/migrations/0005_staff_and_sale_credit.sql -f ${root}/supabase/migrations/0006_day_receipts.sql -f ${root}/supabase/migrations/0007_denominations.sql -f ${root}/supabase/migrations/0008_posting_check.sql -f ${root}/supabase/migrations/0009_security.sql`, { stdio: 'inherit' });
+execSync(`${P} -d ${db} -v ON_ERROR_STOP=1 -q -f ${root}/supabase/tests/00_auth_stub.sql -f ${root}/supabase/migrations/0001_schema.sql -f ${root}/supabase/migrations/0002_api.sql -f ${root}/supabase/migrations/0004_bootstrap.sql -f ${root}/supabase/migrations/0005_staff_and_sale_credit.sql -f ${root}/supabase/migrations/0006_day_receipts.sql -f ${root}/supabase/migrations/0007_denominations.sql -f ${root}/supabase/migrations/0008_posting_check.sql -f ${root}/supabase/migrations/0009_security.sql -f ${root}/supabase/migrations/0010_multi_source_payments.sql`, { stdio: 'inherit' });
 
 const pool = new pg.Pool({ host: '/tmp', port: 5433, user: 'postgres', database: db });
 await pool.query(`create table if not exists auth.local_creds (user_id uuid primary key references auth.users(id) on delete cascade, email text unique, pass_hash text)`);

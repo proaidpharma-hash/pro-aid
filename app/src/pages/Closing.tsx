@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { TopBar } from '../components/Shell';
-import { Card, AmountInput, amountOf, PhotoPicker, Button, Notice, Spinner, Money, ProofLink, Pill, Sheet, Field, Icon } from '../components/ui';
+import { Card, PhotoPicker, Button, Notice, Spinner, Money, ProofLink, Pill, Sheet, Field, Icon, DenominationCount, denominationsTotal, denominationsText, type Denominations } from '../components/ui';
 import { useStore, useIsOwner } from '../lib/store';
 import * as api from '../lib/api';
 import { today, fmtDay, num, fmtDateTime } from '../lib/format';
@@ -16,7 +16,8 @@ export default function Closing() {
   const [params] = useSearchParams();
   const day = params.get('day') || today();
   const [data, setData] = useState<{ sale: api.DailySale | null; lines: api.DailySaleLine[]; receipts: api.SaleReceipt[]; book: api.CashBook; closing: api.Closing | null; bday: api.BusinessDay | null; photos: api.Photo[]; recent: api.Closing[]; closedBy: string } | null>(null);
-  const [counted, setCounted] = useState(params.get('counted') ?? '');
+  const [denoms, setDenoms] = useState<Denominations>({});
+  const [fromSale, setFromSale] = useState(false);
   const [photo, setPhoto] = useState<ProofPhoto | null>(null);
   const [note, setNote] = useState('');
   const [busy, setBusy] = useState(false);
@@ -31,13 +32,14 @@ export default function Closing() {
     const recent = await api.listClosings(from.toISOString().slice(0, 10), day);
     const photos = await api.getPhotos([...(closing ? [closing.drawer_photo_id] : []), ...(sale ? [sale.photo_id] : [])]);
     setData({ sale, lines, receipts, book, closing, bday, photos, recent, closedBy: closing ? profiles.find((p) => p.id === closing.closed_by)?.name ?? '' : '' });
-    if (sale?.pos_source === 'count' && sale.counted_cash !== null && !closing) setCounted((c) => c || String(Math.round(sale.counted_cash!)));
+    if (sale?.pos_source === 'count' && sale.denominations && !closing) { setDenoms(sale.denominations); setFromSale(true); }
   };
   useEffect(() => { load().catch((e) => toast((e as Error).message, 'danger')); }, [day, refreshKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (!data) return <><TopBar title="Daily closing" /><Spinner /></>;
   const { sale, book, closing, bday } = data;
-  const countedN = amountOf(counted);
+  const countedN = denominationsTotal(denoms);
+  const counted = countedN > 0 ? String(countedN) : '';
   const diff = countedN - book.expected_cash;
   const avg = data.recent.filter((c) => c.day !== day).length ? data.recent.filter((c) => c.day !== day).reduce((s, c) => s + c.difference, 0) / data.recent.filter((c) => c.day !== day).length : null;
   const photoPath = (id: string) => data.photos.find((p) => p.id === id)?.storage_path;
@@ -47,7 +49,7 @@ export default function Closing() {
     if (!photo || countedN < 0) return;
     if (diff < 0 && !confirm(`The drawer is SHORT by ${num(-diff)}. Submit anyway? The owner will be alerted.`)) return;
     setBusy(true);
-    try { await api.submitClosing(day, countedN, photo.id, note || undefined); toast(diff < 0 ? 'Closing submitted — minus reported to the owner' : 'Closing submitted', diff < 0 ? 'danger' : 'ok'); useStore.getState().bump(); await load(); } catch (e) { toast((e as Error).message, 'danger'); } finally { setBusy(false); }
+    try { await api.submitClosing(day, countedN, photo.id, note || undefined, denoms); toast(diff < 0 ? 'Closing submitted — minus reported to the owner' : 'Closing submitted', diff < 0 ? 'danger' : 'ok'); useStore.getState().bump(); await load(); } catch (e) { toast((e as Error).message, 'danger'); } finally { setBusy(false); }
   };
   const approve = async () => { setBusy(true); try { await api.approveDay(day); toast('Day approved and locked', 'ok'); useStore.getState().bump(); await load(); } catch (e) { toast((e as Error).message, 'danger'); } finally { setBusy(false); } };
   const doUnlock = async () => { if (!reason.trim()) return; setBusy(true); try { await api.unlockDay(day, reason.trim()); toast('Day unlocked — the manager must close it again', 'ok'); setUnlock(false); setReason(''); useStore.getState().bump(); await load(); } catch (e) { toast((e as Error).message, 'danger'); } finally { setBusy(false); } };
@@ -89,12 +91,13 @@ export default function Closing() {
                 </div>
                 <ProofLink storagePath={photoPath(closing.drawer_photo_id)} label="Drawer photo" />
               </div>
+              {closing.denominations && <div className="help">Notes counted: {denominationsText(closing.denominations)}</div>}
               {closing.note && <div className="help">Note: {closing.note}</div>}
             </Card>
             <Notice kind={bday?.status === 'approved' ? 'ok' : 'info'}>{bday?.status === 'approved' ? 'This day is approved and locked. Nothing in it can change unless the owner unlocks it with a reason.' : 'Closing submitted and cannot be edited. Waiting for the owner to approve and lock the day.'}</Notice>
           </> : profile.role !== 'cashier' && sale ? <>
-            <Card kind="outline" title={<span><span className="pill accent">3</span> Count the drawer</span>}>
-              <AmountInput id="counted" value={counted} onChange={setCounted} />
+            <Card kind="outline" title={<span><span className="pill accent">3</span> Count the drawer · note by note</span>} right={fromSale ? <span className="help">from the count done at the sale</span> : undefined}>
+              <DenominationCount value={denoms} onChange={(d) => { setDenoms(d); setFromSale(false); }} />
               {counted !== '' && <div className={`notice ${diff < 0 ? 'danger' : 'ok'}`} data-testid="live-diff">{diff < 0 ? <Icon.Alert size={16} /> : <Icon.Check size={16} />}<span>Difference {num(diff, diff >= 0)} · {diff < 0 ? 'MINUS — the drawer is short. The owner will be alerted.' : 'plus is normal'}{avg !== null && ` · 7-day avg ${num(Math.round(avg), true)}`}</span></div>}
               <PhotoPicker label="Drawer photo" hint="Photo of the counted cash" value={photo} onChange={setPhoto} userId={profile.id} />
               <Field label="Note (optional)"><input className="input" value={note} onChange={(e) => setNote(e.target.value)} placeholder="e.g. 500 note torn, kept aside" /></Field>
@@ -103,7 +106,7 @@ export default function Closing() {
             <div className="help">Once submitted the closing cannot be changed. A minus turns red and alerts the owner immediately.</div>
           </> : null}
           {data.recent.length > 0 && <Card title="Last 7 closings">
-            {data.recent.map((c) => <div className="row" key={c.id}><div className="grow"><span className="t">{fmtDay(c.day)}</span><span className="s">expected {num(c.expected_cash)} · counted {num(c.counted_cash)}</span></div><Pill kind={c.difference < 0 ? 'danger' : 'ok'}>{num(c.difference, true)}</Pill></div>)}
+            {data.recent.map((c) => <div className="row" key={c.id}><div className="grow"><span className="t">{fmtDay(c.day)}</span><span className="s">expected {num(c.expected_cash)} · counted {num(c.counted_cash)}{c.denominations ? ` · ${denominationsText(c.denominations)}` : ''}</span></div><Pill kind={c.difference < 0 ? 'danger' : 'ok'}>{num(c.difference, true)}</Pill></div>)}
           </Card>}
         </div>
       </div>

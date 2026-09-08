@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { signIn, signOut, attachPhoto, toastSeen, selectByText } from './helpers';
+import { signIn, signOut, attachPhoto, toastSeen, selectByText, countNotes } from './helpers';
 
 // One full pharmacy day, in the order it happens, across the three roles.
 // Each step exercises a rule the owner asked for. Tests run in order against one database.
@@ -161,15 +161,16 @@ test('manager closes the day: expected cash computed, minus turns red, closing i
   await page.goto('/closing');
   // 52,800 + 90,650 + 1,200 − 27,400 − 4,250 = 1,13,000
   await expect(page.getByTestId('expected-cash')).toHaveText('1,13,000');
-  await page.fill('#counted', '112500');
+  await countNotes(page, 112500);
   await expect(page.getByTestId('live-diff')).toContainText('MINUS');
-  await page.fill('#counted', '113940');
+  await countNotes(page, 113940);
   await expect(page.getByTestId('live-diff')).toContainText('Difference + 940');
   await expect(page.getByTestId('submit-closing')).toBeDisabled();
   await attachPhoto(page);
   await page.getByTestId('submit-closing').click();
   await toastSeen(page, 'Closing submitted');
   await expect(page.getByTestId('difference')).toHaveText('+ Rs 940');
+  await expect(page.locator('.content')).toContainText('Notes counted: 5000×22 · 1000×3 · 500×1 · 100×4 · 20×2');
   await expect(page.locator('.content')).toContainText('cannot be edited');
   await page.goto('/');
   await expect(page.locator('.content')).toContainText('1,13,940');
@@ -294,7 +295,7 @@ test('owner corrects an expense with a reason; staff advance; WAW loan; reminder
   await page.goto('/closing');
   // expected: 1,13,000 + 2,750 (expense corrected 4,250→1,500) − 5,000 staff advance + 40,000 WAW − 5,000 repaid = 1,45,750
   await expect(page.getByTestId('expected-cash')).toHaveText('1,45,750');
-  await page.fill('#counted', '146690');
+  await countNotes(page, 146690);
   await attachPhoto(page);
   await page.getByTestId('submit-closing').click();
   await toastSeen(page, /Closing submitted/);
@@ -360,7 +361,7 @@ test('count-first: manager counts the drawer and the app works the sale out, clo
   const d = new Date(); d.setDate(d.getDate() - 3); const day = d.toISOString().slice(0, 10);
   await page.goto(`/sales/new?day=${day}`);
   await page.getByRole('radio', { name: /Count the drawer/ }).click();
-  await page.fill('#counted-now', '30000');
+  await countNotes(page, 30000);
   await attachPhoto(page, 0);
   await expect(page.getByTestId('cash-from-count')).toHaveText('30,000');
   const input = page.locator('label:has-text("HBL card machine") + .amount-wrap input');
@@ -372,7 +373,8 @@ test('count-first: manager counts the drawer and the app works the sale out, clo
   await expect(page).toHaveURL(/\/closing/);
   await expect(page.locator('.content')).toContainText('worked out from the drawer count');
   await expect(page.getByTestId('expected-cash')).toHaveText('30,000');
-  await expect(page.locator('#counted')).toHaveValue('30000');
+  await expect(page.locator('#note-5000')).toHaveValue('6');
+  await expect(page.locator('.content')).toContainText('from the count done at the sale');
   await attachPhoto(page, 0);
   await page.getByTestId('submit-closing').click();
   await toastSeen(page, 'Closing submitted');

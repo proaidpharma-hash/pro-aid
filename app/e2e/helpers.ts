@@ -49,3 +49,13 @@ export async function selectByText(page: Page, selector: string, text: string) {
   const value = await loc.locator('option', { hasText: text }).getAttribute('value');
   await loc.selectOption(value!);
 }
+
+// fill the note-by-note drawer count so that it adds up to `total` (greedy, largest note first)
+export async function countNotes(page: Page, total: number) {
+  let left = total;
+  for (const n of [5000, 1000, 500, 100, 50, 20, 10, 5, 2, 1]) {
+    const c = Math.floor(left / n); left -= c * n;
+    await page.fill(`#note-${n}`, c ? String(c) : '');
+  }
+  await expect(page.getByTestId('denominations-total')).toHaveText(new Intl.NumberFormat('en-IN').format(total));
+}

@@ -369,3 +369,15 @@ select t_ok((select received from non_cash_pool('2026-09-12','2026-09-12') where
 select t_ok((select sum((x->>'amount')::numeric) from jsonb_array_elements(range_summary('2026-09-12','2026-09-12')->'by_account') x) = 7000, 'range summary by account counts receipts and lines');
 reset role;
 select 'ALL RULE TESTS PASSED (incl. receipts)' as result;
+
+-- ---------------------------------------------------------------------------
+-- 11. note-by-note drawer count
+-- ---------------------------------------------------------------------------
+set role app_user;
+select t_as(:manager);
+select t_ok(denominations_total('{"5000": 2, "1000": 3, "500": 1, "20": 2, "1": 5}') = 13545, 'notes add up');
+select t_expect_error($q$ select submit_closing('2026-09-12', 30000, t_photo('00000000-0000-0000-0000-000000000002'), null, '{"5000": 5}') $q$, 'PA033', 'notes must add up to the counted cash');
+select t_ok((select denominations->>'5000' from submit_closing('2026-09-12', 30000, t_photo(:manager), null, '{"5000": 6}')) = '6', 'closing stores the note breakdown');
+select t_ok((select (x->'denominations'->>'5000')::int from jsonb_array_elements(range_summary('2026-09-12','2026-09-12')->'closings') x) = 6, 'reports carry the breakdown');
+reset role;
+select 'ALL RULE TESTS PASSED (incl. denominations)' as result;

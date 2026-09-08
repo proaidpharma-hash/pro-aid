@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useSearchParams, Link } from 'react-router-dom';
 import { TopBar } from '../components/Shell';
-import { Card, AmountInput, amountOf, PhotoPicker, Button, Notice, Icon, Spinner, Money, ProofLink, Pill, Tiles, Sheet, Field, Chips } from '../components/ui';
+import { Card, AmountInput, amountOf, PhotoPicker, Button, Notice, Icon, Spinner, Money, ProofLink, Pill, Tiles, Sheet, Field, Chips, DenominationCount, denominationsTotal, denominationsText, type Denominations } from '../components/ui';
 import { useStore, useIsOwner } from '../lib/store';
 import * as api from '../lib/api';
 import { today, fmtDay, num, fmtShort, fmtTime } from '../lib/format';
@@ -24,7 +24,8 @@ export function SaleNew() {
   const nonCash = useMemo(() => accounts.filter((a) => ['card_machine', 'wallet', 'bank'].includes(a.kind)), [accounts]);
   const [mode, setMode] = useState<'pos' | 'count'>('pos');
   const [posTotal, setPosTotal] = useState('');
-  const [counted, setCounted] = useState('');
+  const [denoms, setDenoms] = useState<Denominations>({});
+  const counted = denominationsTotal(denoms) > 0 ? String(denominationsTotal(denoms)) : '';
   const [before, setBefore] = useState<number | null>(null);
   const [posPhoto, setPosPhoto] = useState<ProofPhoto | null>(null);
   const [lines, setLines] = useState<Record<string, { amount: string; photo: ProofPhoto | null }>>({});
@@ -58,7 +59,7 @@ export function SaleNew() {
     setBusy(true);
     try {
       await api.saveDailySale({
-        day, pos_total: pos, credit_total: creditTotal, photo_id: posPhoto.id, pos_source: mode, counted_cash: mode === 'count' ? countedN : null,
+        day, pos_total: pos, credit_total: creditTotal, photo_id: posPhoto.id, pos_source: mode, counted_cash: mode === 'count' ? countedN : null, denominations: mode === 'count' ? denoms : null,
         lines: nonCash.filter((a) => !receipts[a.id] && amountOf(lines[a.id]?.amount ?? '') > 0).map((a) => ({ account_id: a.id, amount: amountOf(lines[a.id].amount), photo_id: lines[a.id].photo!.id })),
         credits: credits.map((c) => ({ who: c.who, id: c.id, bill_no: c.bill_no, amount: c.amount, bill_total: c.bill_total, photo_id: c.photo.id })),
       });
@@ -81,8 +82,8 @@ export function SaleNew() {
             <AmountInput id="pos-total" value={posTotal} onChange={setPosTotal} autoFocus />
             <PhotoPicker label="POS screen photo" hint="Photo of the POS daily total" value={posPhoto} onChange={setPosPhoto} userId={profile.id} />
           </Card> : <Card>
-            <div className="card-title"><span>Cash counted in the drawer now</span><span className="danger" style={{ fontSize: 11 }}>photo required</span></div>
-            <AmountInput id="counted-now" value={counted} onChange={setCounted} autoFocus />
+            <div className="card-title"><span>Count the notes in the drawer</span><span className="danger" style={{ fontSize: 11 }}>photo required</span></div>
+            <DenominationCount value={denoms} onChange={setDenoms} />
             <PhotoPicker label="Drawer photo" hint="Photo of the counted cash" value={posPhoto} onChange={setPosPhoto} userId={profile.id} />
             {before === null ? <Spinner /> : <>
               <div className="line"><span className="k">Cash that should be there before today's sale</span><span className="v num">{num(before)}</span></div>
@@ -239,7 +240,7 @@ export function SalesPage() {
               {sale.credit_total !== creditEntered && <Notice kind="warn">Credit total {num(sale.credit_total)} but bills entered {num(creditEntered)} — add the missing bills under Customers</Notice>}
             </Card>
           </div>
-          {sale.pos_source === 'count' && <Notice kind="warn">This day's sale was worked out from the drawer count ({num(sale.counted_cash)} counted), not typed from the POS. Compare it with the POS report before approving.</Notice>}
+          {sale.pos_source === 'count' && <Notice kind="warn">This day's sale was worked out from the drawer count ({num(sale.counted_cash)} counted{sale.denominations ? `: ${denominationsText(sale.denominations)}` : ''}), not typed from the POS. Compare it with the POS report before approving.</Notice>}
           <Card kind="outline">
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 14, alignItems: 'center', fontSize: 13, fontWeight: 700 }} className="num">
               <b className="accent">Drawer check (cash only)</b>

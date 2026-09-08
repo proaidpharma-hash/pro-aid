@@ -11,7 +11,7 @@ export type Customer = { id: string; name: string; phone: string | null; note: s
 export type CustomerBalance = { id: string; name: string; phone: string | null; owed: number; since: string | null };
 export type ExpenseCategory = { id: string; name: string; active: boolean; sort_order: number };
 export type BusinessDay = { day: string; opening_cash: number; status: 'open' | 'closed' | 'approved'; closed_by: string | null; closed_at: string | null; approved_by: string | null; approved_at: string | null };
-export type DailySale = { id: string; day: string; pos_total: number; credit_total: number; photo_id: string; pos_source: 'pos' | 'count'; counted_cash: number | null; entered_by: string; device: string | null; created_at: string };
+export type DailySale = { id: string; day: string; pos_total: number; credit_total: number; photo_id: string; pos_source: 'pos' | 'count'; counted_cash: number | null; denominations: Record<string, number> | null; entered_by: string; device: string | null; created_at: string };
 export type SaleReceipt = { id: string; day: string; account_id: string; amount: number; note: string | null; photo_id: string; entered_by: string; device: string | null; created_at: string };
 export type DailySaleLine = { id: string; daily_sale_id: string; account_id: string; amount: number; photo_id: string };
 export type Invoice = { id: string; distributor_id: string; invoice_no: string; invoice_date: string | null; day: string; amount: number; photo_id: string; posted_in_pos: boolean; posted_at: string | null; posted_by: string | null; installments_planned: number | null; next_due: string | null; note: string | null; entered_by: string; device: string | null; created_at: string };
@@ -24,7 +24,7 @@ export type StaffBalance = { id: string; name: string; role: Role; has_login: bo
 export type WawLoan = { id: string; day: string; kind: 'borrow' | 'repay'; amount: number; account_id: string; handled_by: string | null; note: string | null; photo_id: string; entered_by: string; created_at: string };
 export type OwnerPaid = { payment_id: string; day: string; amount: number; invoice_id: string; invoice_no: string; distributor_name: string; settled: number; unsettled: number; requested_by: string | null; photo_id: string };
 export type OwnerSettlement = { id: string; payment_id: string; day: string; kind: 'cash_return' | 'minus_receipts'; account_id: string | null; amount: number; photo_id: string; created_at: string };
-export type Closing = { id: string; day: string; expected_cash: number; counted_cash: number; difference: number; drawer_photo_id: string; note: string | null; closed_by: string; device: string | null; created_at: string };
+export type Closing = { id: string; day: string; expected_cash: number; counted_cash: number; difference: number; drawer_photo_id: string; note: string | null; denominations: Record<string, number> | null; closed_by: string; device: string | null; created_at: string };
 export type CreditBill = { id: string; customer_id: string; day: string; bill_no: string; amount: number; bill_total: number | null; photo_id: string; sale_id: string | null; entered_by: string; created_at: string };
 export type CreditCollection = { id: string; customer_id: string; bill_id: string | null; day: string; amount: number; account_id: string; photo_id: string; entered_by: string; created_at: string };
 export type Reminder = { id: string; invoice_id: string | null; title: string; amount: number | null; remind_at: string; notify_all: boolean; repeat_daily: boolean; created_by: string; done_at: string | null; last_fired_at: string | null; created_at: string };
@@ -37,7 +37,7 @@ export type RangeSummary = {
   by_account: { account_id: string; name: string; kind: AccountKind; provider: string | null; amount: number }[];
   purchases_received: number; purchases_paid: number; expenses: number; expenses_by_category: { name: string; amount: number }[];
   staff_advances: number; staff_recovered: number; owed_to_distributors: number; owed_by_customers: number; owed_by_staff: number; owed_to_waw: number; owed_to_owner: number;
-  closings: { day: string; expected: number; counted: number; difference: number; closed_by: string; status: string }[];
+  closings: { day: string; expected: number; counted: number; difference: number; closed_by: string; status: string; denominations: Record<string, number> | null }[];
   days_closed: number; days_approved: number;
 };
 export type Photo = { id: string; storage_path: string; taken_by: string; taken_at: string; device: string | null };
@@ -87,8 +87,8 @@ export const cashBook = async (day: string) => { const rows = must(await supabas
 export const getDailySale = async (day: string) => { const s = (await supabase.from('daily_sales').select('*').eq('day', day).maybeSingle()).data as DailySale | null; return s ? { ...numify(s, ['pos_total', 'credit_total']), counted_cash: s.counted_cash === null ? null : n(s.counted_cash) } : null; };
 export const getSaleLines = async (saleId: string) => (must(await supabase.from('daily_sale_lines').select('*').eq('daily_sale_id', saleId)) as DailySaleLine[]).map((l) => numify(l, ['amount']));
 export type SaleCreditLine = { who: 'customer' | 'staff'; id: string; bill_no: string; amount: number; bill_total: number | null; photo_id: string };
-export async function saveDailySale(input: { day: string; pos_total: number; credit_total: number; photo_id: string; pos_source?: 'pos' | 'count'; counted_cash?: number | null; lines: { account_id: string; amount: number; photo_id: string }[]; credits?: SaleCreditLine[] }) {
-  const sale = must(await supabase.from('daily_sales').insert({ day: input.day, pos_total: input.pos_total, credit_total: input.credit_total, photo_id: input.photo_id, pos_source: input.pos_source ?? 'pos', counted_cash: input.counted_cash ?? null }).select('*').single()) as DailySale;
+export async function saveDailySale(input: { day: string; pos_total: number; credit_total: number; photo_id: string; pos_source?: 'pos' | 'count'; counted_cash?: number | null; denominations?: Record<string, number> | null; lines: { account_id: string; amount: number; photo_id: string }[]; credits?: SaleCreditLine[] }) {
+  const sale = must(await supabase.from('daily_sales').insert({ day: input.day, pos_total: input.pos_total, credit_total: input.credit_total, photo_id: input.photo_id, pos_source: input.pos_source ?? 'pos', counted_cash: input.counted_cash ?? null, denominations: input.denominations ?? null }).select('*').single()) as DailySale;
   const lines = input.lines.filter((l) => l.amount > 0);
   if (lines.length) must(await supabase.from('daily_sale_lines').insert(lines.map((l) => ({ ...l, daily_sale_id: sale.id }))).select('id'));
   for (const c of input.credits ?? []) {
@@ -103,7 +103,7 @@ export const dayReceipts = async (day: string) => (must(await supabase.rpc('day_
 export const dayCredit = async (day: string) => { const rows = must(await supabase.rpc('day_credit', { d: day })) as { customer_credit: number; staff_credit: number; bills: number }[]; const r = Array.isArray(rows) ? rows[0] : rows; return { customer_credit: n(r.customer_credit), staff_credit: n(r.staff_credit), bills: Number(r.bills) }; };
 export const cashBeforeSale = async (day: string) => n(must(await supabase.rpc('cash_before_sale', { d: day })));
 export const getClosing = async (day: string) => { const c = (await supabase.from('closings').select('*').eq('day', day).maybeSingle()).data as Closing | null; return c ? numify(c, ['expected_cash', 'counted_cash', 'difference']) : null; };
-export const submitClosing = async (day: string, counted: number, photoId: string, note?: string) => numify(must(await supabase.rpc('submit_closing', { p_day: day, p_counted: counted, p_drawer_photo: photoId, p_note: note ?? null })) as Closing, ['expected_cash', 'counted_cash', 'difference']);
+export const submitClosing = async (day: string, counted: number, photoId: string, note?: string, denominations?: Record<string, number> | null) => numify(must(await supabase.rpc('submit_closing', { p_day: day, p_counted: counted, p_drawer_photo: photoId, p_note: note ?? null, p_denominations: denominations ?? null })) as Closing, ['expected_cash', 'counted_cash', 'difference']);
 export const approveDay = async (day: string) => must(await supabase.rpc('approve_day', { p_day: day }));
 export const unlockDay = async (day: string, reason: string) => must(await supabase.rpc('unlock_day', { p_day: day, p_reason: reason }));
 export const listClosings = async (from: string, to: string) => (must(await supabase.from('closings').select('*').gte('day', from).lte('day', to).order('day', { ascending: false })) as Closing[]).map((c) => numify(c, ['expected_cash', 'counted_cash', 'difference']));

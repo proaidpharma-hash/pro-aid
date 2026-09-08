@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { TopBar } from '../components/Shell';
 import { Card, KPI, Button, Notice, Spinner, Pill, Chips, Empty, Field, Sheet, Icon, ProofLink } from '../components/ui';
+import { denominationsText } from '../components/ui';
 import { useStore, useIsOwner } from '../lib/store';
 import * as api from '../lib/api';
 import { today, num, fmtShort, fmtDay, fmtDateTime } from '../lib/format';
@@ -158,7 +159,7 @@ export function ReportsPage() {
         title: 'Pro Aid report', from: range.from, to: range.to,
         sections: [
           { title: 'Summary', rows: [['Sales (all methods)', num(s.pos_total)], ['Purchases received', num(s.purchases_received)], ['Purchases paid', num(s.purchases_paid)], ['Expenses', num(s.expenses)], ['Owed to distributors', num(s.owed_to_distributors)], ['Non-cash received', num(nonCashReceived)], ['Cash difference (closings)', num(s.closings.reduce((t, c) => t + c.difference, 0), true)]] },
-          { title: 'Daily closing · system vs drawer', head: ['Date', 'Expected', 'Counted', 'Difference', 'Closed by', 'Status'], rows: s.closings.map((c) => [fmtShort(c.day), num(c.expected), num(c.counted), num(c.difference, true), c.closed_by, c.status]) },
+          { title: 'Daily closing · system vs drawer', head: ['Date', 'Expected', 'Counted', 'Difference', 'Closed by', 'Status', 'Notes counted'], rows: s.closings.map((c) => [fmtShort(c.day), num(c.expected), num(c.counted), num(c.difference, true), c.closed_by, c.status, denominationsText(c.denominations)]) },
           { title: 'Non-cash received from customers', head: ['Account', 'Received', 'Minused', 'Remaining'], rows: [...pool.rows.map((r) => [r.account_name, num(r.received), num(r.minused), num(r.remaining)]), ['Total', num(nonCashReceived), num(minused), num(nonCashReceived - minused)]] },
           { title: 'Paid to distributors online', head: ['Date', 'Distributor', 'Invoice', 'Via', 'Amount'], rows: online.map((p) => [fmtShort(p.day), inv(p.invoice_id)?.distributor_name ?? '', inv(p.invoice_id)?.invoice_no ?? '', accounts.find((a) => a.id === p.account_id)?.name ?? '', num(p.amount)]) },
           { title: 'Expenses by category', head: ['Category', 'Amount'], rows: s.expenses_by_category.map((c) => [c.name, num(c.amount)]) },

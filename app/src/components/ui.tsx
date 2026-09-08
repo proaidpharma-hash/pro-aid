@@ -129,3 +129,28 @@ export function ProofLink({ storagePath, label = 'Photo' }: { storagePath: strin
 }
 
 export function Money({ v, sign, className = '' }: { v: number | null | undefined; sign?: boolean; className?: string }) { return <span className={`num ${className}`}>{rs(v, { sign })}</span>; }
+
+// Note-by-note drawer count (Pakistani rupee notes and coins). The total is worked out, never typed.
+export const DENOMINATIONS = [5000, 1000, 500, 100, 50, 20, 10, 5, 2, 1] as const;
+export type Denominations = Record<string, number>;
+export const denominationsTotal = (d: Denominations) => Object.entries(d).reduce((s, [k, v]) => s + Number(k) * (v || 0), 0);
+export const denominationsText = (d: Denominations | null | undefined) => d ? DENOMINATIONS.filter((n) => d[String(n)] > 0).map((n) => `${n}×${d[String(n)]}`).join(' · ') : '';
+export function DenominationCount({ value, onChange, readOnly = false }: { value: Denominations; onChange?: (d: Denominations) => void; readOnly?: boolean }) {
+  const total = denominationsTotal(value);
+  return (
+    <div className="denoms" data-testid="denominations">
+      {DENOMINATIONS.map((n) => {
+        const count = value[String(n)] ?? 0;
+        if (readOnly && !count) return null;
+        return (
+          <div className="line" key={n}>
+            <span className="k num" style={{ width: 90, fontWeight: 800 }}>{n >= 10 ? `Rs ${n}` : `${n} coin`}</span>
+            {readOnly ? <span className="num" style={{ flex: 1 }}>× {count}</span> : <span style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 6 }}><span className="muted">×</span><input id={`note-${n}`} className="input num" inputMode="numeric" pattern="[0-9]*" placeholder="0" style={{ width: 90 }} value={count ? String(count) : ''} onChange={(e) => { const v = e.target.value.replace(/[^\d]/g, ''); onChange?.({ ...value, [String(n)]: v ? Number(v) : 0 }); }} /></span>}
+            <span className="v num" style={{ minWidth: 90, textAlign: 'right' }}>{count ? rs(n * count, { prefix: false }) : <span className="muted">—</span>}</span>
+          </div>
+        );
+      })}
+      <div className="line total"><span className="k">Total counted</span><span className="v num accent" data-testid="denominations-total">{rs(total, { prefix: false })}</span></div>
+    </div>
+  );
+}

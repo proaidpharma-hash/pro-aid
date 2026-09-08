@@ -187,6 +187,14 @@ select t_ok((select expected_cash from cash_book('2026-09-07')) = 113700, 'drawe
 -- cashier cannot close; manager can; minus alerts owner
 select t_expect_error($q$ select submit_closing('2026-09-07', 113000, t_photo('00000000-0000-0000-0000-000000000003')) $q$, '42501', 'cashier cannot submit a closing');
 select t_as(:manager, 'Pharmacy Android');
+-- posting check: an unposted invoice without today's reason blocks the closing
+select t_expect_error($q$ select submit_closing('2026-09-07', 114640, t_photo('00000000-0000-0000-0000-000000000002')) $q$, 'PA034', 'closing waits for unposted invoices');
+select t_ok((select count(*) from closing_blockers('2026-09-07')) = 1, 'one invoice blocks the closing');
+select t_expect_error($q$ select give_unposted_reason((select id from invoices where invoice_no='55120'), '2026-09-07', '  ') $q$, 'PA042', 'unposted reason cannot be blank');
+select give_unposted_reason((select id from invoices where invoice_no='55120'), '2026-09-07', 'stock check still pending');
+select t_ok((select count(*) from closing_blockers('2026-09-07')) = 0, 'reason given for today clears the block');
+select t_ok((select count(*) from closing_blockers('2026-09-08')) = 1, 'the same invoice is asked about again at the next closing');
+select t_ok((select unposted_reason_by_name from v_invoice_status where invoice_no='55120') = 'Bilal', 'reason records who gave it');
 select submit_closing('2026-09-07', 114640, t_photo(:manager));
 select t_ok((select difference from closings where day='2026-09-07') = 940, 'difference is +940');
 select t_ok((select status from business_days where day='2026-09-07') = 'closed', 'day is closed');
@@ -291,7 +299,19 @@ select t_ok((select count(*) from notifications where kind='payment_reminder' an
 select t_expect_error($q$ select mark_posted((select id from invoices where invoice_no='30412')) $q$, '42501', 'cashier cannot mark posted in POS');
 select t_as(:manager);
 select mark_posted((select id from invoices where invoice_no='30412'));
-select t_ok((select posted_in_pos from invoices where invoice_no='30412'), 'manager marked invoice posted in POS');
+select t_ok((select posted_in_pos and posted_amount = amount from invoices where invoice_no='30412'), 'manager marked invoice posted in POS at the full amount');
+-- 55120 (53,800, fully paid) posts at 51,800: two items short → 2,000 difference the distributor owes
+select t_expect_error($q$ select mark_posted((select id from invoices where invoice_no='55120'), 51800) $q$, 'PA040', 'a lower posted amount needs a reason');
+select mark_posted((select id from invoices where invoice_no='55120'), 51800, 'short_items', 'two packs of Panadol missing');
+select t_ok((select post_diff from v_invoice_status where invoice_no='55120') = 2000 and (select diff_pending from v_invoice_status where invoice_no='55120') = 2000, 'posting difference of 2,000 recorded');
+select t_ok((select diff_pending from v_distributor_balance where name='Getz Pharma') = 2000, 'distributor owes the difference');
+select t_as(:owner);
+select t_ok((select count(*) from notifications where kind='unposted_invoice' and title like 'Posted with a difference%' and user_id = :owner::uuid) = 1, 'owner alerted about the difference');
+select t_as(:manager);
+select t_expect_error($q$ insert into invoice_diff_settlements(invoice_id, day, kind, amount, photo_id) values ((select id from invoices where invoice_no='55120'), '2026-09-09', 'goods_received', 2500, t_photo('00000000-0000-0000-0000-000000000002')) $q$, 'PA041', 'cannot settle more than the difference');
+insert into invoice_diff_settlements(invoice_id, day, kind, amount, photo_id) values ((select id from invoices where invoice_no='55120'), '2026-09-09', 'goods_received', 2000, t_photo(:manager));
+select t_ok((select diff_pending from v_distributor_balance where name='Getz Pharma') = 0, 'difference settled when the goods arrive');
+select t_ok((range_summary('2026-09-01','2026-09-30')->>'distributor_diff_pending')::numeric = 0, 'reports show no pending difference');
 select t_ok((select pending from v_distributor_balance where name='Getz Pharma') = 0 and (select pending from v_distributor_balance where name='Muller & Phipps') = 0, 'distributor balances are zero after full payment');
 
 reset role;

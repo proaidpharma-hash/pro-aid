@@ -4,6 +4,7 @@ import { TopBar } from '../components/Shell';
 import { Card, Field, AmountInput, amountOf, PhotoPicker, Button, Notice, Spinner, Pill, ProofLink, Chips, Empty, Sheet } from '../components/ui';
 import { useStore, useIsManagerOrOwner, useIsOwner } from '../lib/store';
 import * as api from '../lib/api';
+import { PostedSheet } from '../components/Posting';
 import { today, fmtDay, num, fmtShort, initials } from '../lib/format';
 import type { ProofPhoto } from '../lib/photos';
 
@@ -19,7 +20,6 @@ export function PurchasesPage() {
   const [rows, setRows] = useState<api.InvoiceStatus[] | null>(null);
   const [photos, setPhotos] = useState<api.Photo[]>([]);
   const [profiles, setProfiles] = useState<api.Profile[]>([]);
-  const [busy, setBusy] = useState<string | null>(null);
   useEffect(() => {
     (async () => {
       const [r, p] = await Promise.all([api.invoiceStatus(tab === 'all' ? undefined : { unpaid: tab === 'unpaid', installments: tab === 'installments', unposted: tab === 'unposted' }), api.listProfiles()]);
@@ -27,7 +27,7 @@ export function PurchasesPage() {
     })().catch((e) => toast((e as Error).message, 'danger'));
   }, [tab, refreshKey]); // eslint-disable-line react-hooks/exhaustive-deps
   const unpostedCount = useMemo(() => rows?.filter((r) => !r.posted_in_pos).length ?? 0, [rows]);
-  const mark = async (id: string) => { setBusy(id); try { await api.markPosted(id); toast('Marked as posted in POS', 'ok'); useStore.getState().bump(); } catch (e) { toast((e as Error).message, 'danger'); } finally { setBusy(null); } };
+  const [posting, setPosting] = useState<api.InvoiceStatus | null>(null);
   const who = (id: string | null) => profiles.find((p) => p.id === id)?.name ?? '';
   const days = (d: string) => Math.max(0, Math.round((new Date(today()).getTime() - new Date(d).getTime()) / 86400000));
   return (
@@ -50,7 +50,7 @@ export function PurchasesPage() {
                   <td className="r num"><b>{num(r.amount)}</b></td>
                   <td className="r num">{num(r.paid)}</td>
                   <td>{r.remaining <= 0 ? <Pill kind="ok">Paid</Pill> : r.installments_planned ? <Pill kind="warn">Installments {r.payments_made}/{r.installments_planned}{r.next_due ? ` · next ${fmtShort(r.next_due)}` : ''}</Pill> : r.paid > 0 ? <Pill kind="warn">Part paid · {num(r.remaining)} left</Pill> : <Pill kind="warn">Pending</Pill>}</td>
-                  <td>{r.posted_in_pos ? <Pill kind="ok">Posted{r.posted_by ? ` · ${who(r.posted_by).split(' ')[0]}` : ''}</Pill> : <span style={{ display: 'flex', gap: 6, alignItems: 'center' }}><Pill kind="danger">Not posted · {days(r.day) === 0 ? 'today' : `${days(r.day)}d`}</Pill>{canPost && <Button size="sm" kind="primary" disabled={busy === r.id} onClick={() => mark(r.id)}>Mark posted</Button>}</span>}</td>
+                  <td>{r.posted_in_pos ? <span style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}><Pill kind="ok">Posted{r.posted_by ? ` · ${who(r.posted_by).split(' ')[0]}` : ''}</Pill>{r.post_diff > 0 && <Pill kind={r.diff_pending > 0 ? 'danger' : 'neutral'}>{r.diff_pending > 0 ? `${num(r.diff_pending)} short · ${r.post_diff_kind ? api.DIFF_KIND_LABEL[r.post_diff_kind] : ''}` : `${num(r.post_diff)} difference settled`}</Pill>}</span> : <span style={{ display: 'flex', gap: 6, alignItems: 'center' }}><Pill kind="danger">Not posted · {days(r.day) === 0 ? 'today' : `${days(r.day)}d`}</Pill>{canPost && <Button size="sm" kind="primary" onClick={() => setPosting(r)}>Posted in POS…</Button>}</span>}</td>
                   <td>{who(r.entered_by)}{r.device ? <span className="muted"> · {r.device}</span> : ''}</td>
                   <td><span style={{ display: 'flex', gap: 4 }}><ProofLink storagePath={photos.find((p) => p.id === r.photo_id)?.storage_path} />{r.remaining > 0 && <Link className="btn sm" to={`/pay?invoice=${r.id}`}>Pay</Link>}{isOwner && <Link className="btn ghost sm" to={`?edit=invoices:${r.id}`}>Edit</Link>}</span></td>
                 </tr>
@@ -59,6 +59,7 @@ export function PurchasesPage() {
           </Card>
         )}
       </div>
+      {posting && <PostedSheet invoice={posting} onClose={() => setPosting(null)} onSaved={() => { setPosting(null); useStore.getState().bump(); }} />}
     </>
   );
 }

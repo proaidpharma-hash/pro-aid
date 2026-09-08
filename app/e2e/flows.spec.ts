@@ -161,6 +161,24 @@ test('manager closes the day: expected cash computed, minus turns red, closing i
   await page.goto('/closing');
   // 52,800 + 90,650 + 1,200 − 27,400 − 4,250 = 1,13,000
   await expect(page.getByTestId('expected-cash')).toHaveText('1,13,000');
+  // posting check: the invoice received today is not posted — closing waits for an answer
+  await expect(page.locator('.content')).toContainText('Needs answer');
+  await expect(page.getByTestId('submit-closing')).toContainText('Answer 1 unposted invoice');
+  await page.getByTestId('posting-reason').click();
+  await page.getByTestId('unposted-reason').fill('stock check still pending');
+  await page.getByTestId('unposted-reason-save').click();
+  await toastSeen(page, 'Reason saved');
+  await expect(page.locator('.content')).toContainText('not posted: stock check still pending (Bilal Hussain)');
+  // …then it turns out only 51,800 of the 53,800 was posted: two items short
+  await page.getByTestId('posting-posted').click();
+  await page.fill('#posted-amount', '51800');
+  await expect(page.locator('.sheet')).toContainText('Posted 2,000 less than the invoice');
+  await page.getByRole('radio', { name: 'Items short' }).click();
+  await page.getByTestId('diff-note').fill('2 packs missing, rep will send tomorrow');
+  await page.getByTestId('posted-save').click();
+  await toastSeen(page, '2,000 difference recorded');
+  await expect(page.locator('.content')).toContainText('Posted today with a difference');
+  await expect(page.locator('.content')).toContainText('2,000 short');
   await countNotes(page, 112500);
   await expect(page.getByTestId('live-diff')).toContainText('MINUS');
   await countNotes(page, 113940);
@@ -180,6 +198,16 @@ test('manager closes the day: expected cash computed, minus turns red, closing i
 test('owner sees the alerts, approves & locks the day, locked day rejects entries, unlock needs a reason', async ({ page }) => {
   await signOut(page);
   await signIn(page, 'owner');
+  // the posting difference shows on the distributor and can be settled once the goods arrive
+  await page.goto('/distributors');
+  await expect(page.locator('.content')).toContainText('they owe 2,000 (posting difference)');
+  await page.locator('.row', { hasText: 'Getz Pharma' }).click();
+  await expect(page.locator('.content')).toContainText('They owe us · posting differences · 2,000');
+  await page.getByRole('button', { name: 'Settle…' }).click();
+  await attachPhoto(page);
+  await page.locator('.sheet button:has-text("Settle")').last().click();
+  await toastSeen(page, 'Difference settled');
+  await expect(page.locator('.content')).not.toContainText('They owe us');
   await page.goto('/notifications');
   await expect(page.locator('.content')).toContainText('Closing submitted');
   await page.goto('/closing');

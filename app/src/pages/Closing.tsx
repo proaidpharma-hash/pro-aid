@@ -6,6 +6,7 @@ import { useStore, useIsOwner } from '../lib/store';
 import * as api from '../lib/api';
 import { today, fmtDay, num, fmtDateTime } from '../lib/format';
 import type { ProofPhoto } from '../lib/photos';
+import { PostingCheck } from '../components/Posting';
 
 // Daily closing: the app adds up what the drawer should hold; the manager counts; the difference is the control figure.
 export default function Closing() {
@@ -18,6 +19,7 @@ export default function Closing() {
   const [data, setData] = useState<{ sale: api.DailySale | null; lines: api.DailySaleLine[]; receipts: api.SaleReceipt[]; book: api.CashBook; closing: api.Closing | null; bday: api.BusinessDay | null; photos: api.Photo[]; recent: api.Closing[]; closedBy: string } | null>(null);
   const [denoms, setDenoms] = useState<Denominations>({});
   const [fromSale, setFromSale] = useState(false);
+  const [blocked, setBlocked] = useState(0);
   const [photo, setPhoto] = useState<ProofPhoto | null>(null);
   const [note, setNote] = useState('');
   const [busy, setBusy] = useState(false);
@@ -84,6 +86,7 @@ export default function Closing() {
             <div className="line total"><span className="k">Drawer should hold</span><span className="v num accent" data-testid="expected-cash">{num(book.expected_cash)}</span></div>
           </Card>
           {closing ? <>
+            <PostingCheck day={day} canPost={profile.role !== 'cashier' && bday?.status !== 'approved'} onChange={() => undefined} />
             <Card kind={closing.difference < 0 ? 'danger' : 'ok'}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
                 <div style={{ flex: 1 }}>
@@ -96,13 +99,14 @@ export default function Closing() {
             </Card>
             <Notice kind={bday?.status === 'approved' ? 'ok' : 'info'}>{bday?.status === 'approved' ? 'This day is approved and locked. Nothing in it can change unless the owner unlocks it with a reason.' : 'Closing submitted and cannot be edited. Waiting for the owner to approve and lock the day.'}</Notice>
           </> : profile.role !== 'cashier' && sale ? <>
+            <PostingCheck day={day} canPost onChange={setBlocked} />
             <Card kind="outline" title={<span><span className="pill accent">3</span> Count the drawer · note by note</span>} right={fromSale ? <span className="help">from the count done at the sale</span> : undefined}>
               <DenominationCount value={denoms} onChange={(d) => { setDenoms(d); setFromSale(false); }} />
               {counted !== '' && <div className={`notice ${diff < 0 ? 'danger' : 'ok'}`} data-testid="live-diff">{diff < 0 ? <Icon.Alert size={16} /> : <Icon.Check size={16} />}<span>Difference {num(diff, diff >= 0)} · {diff < 0 ? 'MINUS — the drawer is short. The owner will be alerted.' : 'plus is normal'}{avg !== null && ` · 7-day avg ${num(Math.round(avg), true)}`}</span></div>}
               <PhotoPicker label="Drawer photo" hint="Photo of the counted cash" value={photo} onChange={setPhoto} userId={profile.id} />
               <Field label="Note (optional)"><input className="input" value={note} onChange={(e) => setNote(e.target.value)} placeholder="e.g. 500 note torn, kept aside" /></Field>
             </Card>
-            <div className="form-footer"><Button kind="primary" size="big" disabled={!photo || counted === '' || busy} onClick={submit} data-testid="submit-closing">{busy ? 'Submitting…' : 'Submit closing'}</Button></div>
+            <div className="form-footer"><Button kind="primary" size="big" disabled={!photo || counted === '' || busy || blocked > 0} onClick={submit} data-testid="submit-closing">{busy ? 'Submitting…' : blocked > 0 ? `Answer ${blocked} unposted invoice${blocked === 1 ? '' : 's'} first` : 'Submit closing'}</Button></div>
             <div className="help">Once submitted the closing cannot be changed. A minus turns red and alerts the owner immediately.</div>
           </> : null}
           {data.recent.length > 0 && <Card title="Last 7 closings">

@@ -4,6 +4,7 @@ import { TopBar } from '../components/Shell';
 import { Card, Field, AmountInput, amountOf, PhotoPicker, Button, Notice, Spinner, Pill, ProofLink, Chips, Empty, Sheet, Icon } from '../components/ui';
 import { useStore, useIsOwner } from '../lib/store';
 import * as api from '../lib/api';
+import { DiffSettleSheet } from '../components/Posting';
 import { today, num, fmtShort, initials, fmtDay } from '../lib/format';
 import type { ProofPhoto } from '../lib/photos';
 
@@ -25,7 +26,7 @@ export function DistributorsPage() {
           <input className="input" style={{ maxWidth: 260 }} placeholder="Search distributor" value={q} onChange={(e) => setQ(e.target.value)} />
           <Chips options={[{ value: 'all', label: 'All' }, { value: 'pending', label: 'Pending' }, { value: 'overdue', label: 'Overdue 7d+' }, { value: 'clear', label: 'Clear' }]} value={tab} onChange={setTab} />
         </div>
-        <Card>{!rows ? <Spinner /> : list.length === 0 ? <Empty>No distributors</Empty> : list.map((r) => <Link to={`/distributors/${r.id}`} className="row" key={r.id} style={{ color: 'inherit' }}><div className="avatar">{initials(r.name)}</div><div className="grow"><span className="t">{r.name}</span><span className="s">{r.pending > 0 ? `${r.open_invoices} pending · oldest ${days(r.oldest_open)} days` : 'Clear'}</span></div><span className={`amt num ${r.pending > 0 ? 'warn' : 'ok'}`}>{num(r.pending)}</span></Link>)}</Card>
+        <Card>{!rows ? <Spinner /> : list.length === 0 ? <Empty>No distributors</Empty> : list.map((r) => <Link to={`/distributors/${r.id}`} className="row" key={r.id} style={{ color: 'inherit' }}><div className="avatar">{initials(r.name)}</div><div className="grow"><span className="t">{r.name}</span><span className="s">{r.pending > 0 ? `${r.open_invoices} pending · oldest ${days(r.oldest_open)} days` : 'Clear'}{r.diff_pending > 0 ? <> · <b className="danger">they owe {num(r.diff_pending)} (posting difference)</b></> : ''}</span></div><span className={`amt num ${r.pending > 0 ? 'warn' : 'ok'}`}>{num(r.pending)}</span></Link>)}</Card>
       </div>
     </>
   );
@@ -43,6 +44,8 @@ export function DistributorDetail() {
   const [profiles, setProfiles] = useState<api.Profile[]>([]);
   const [photos, setPhotos] = useState<api.Photo[]>([]);
   const [reminder, setReminder] = useState<api.InvoiceStatus | null>(null);
+  const [settle, setSettle] = useState<api.InvoiceStatus | null>(null);
+  const profile = useStore((s) => s.profile)!;
   useEffect(() => {
     if (!id) return;
     (async () => {
@@ -55,6 +58,8 @@ export function DistributorDetail() {
   }, [id, refreshKey, toast]);
   if (!d) return <><TopBar title="Distributor" back /><Spinner /></>;
   const pending = invoices.reduce((s, i) => s + i.remaining, 0) + d.opening_balance;
+  const diffPending = invoices.reduce((s, i) => s + i.diff_pending, 0);
+  const diffInvoices = invoices.filter((i) => i.diff_pending > 0);
   const month = today().slice(0, 7);
   const purchasedMonth = invoices.filter((i) => i.day.startsWith(month)).reduce((s, i) => s + i.amount, 0);
   const paidMonth = payments.filter((p) => p.day.startsWith(month)).reduce((s, p) => s + p.amount, 0);
@@ -72,6 +77,9 @@ export function DistributorDetail() {
           <div className="card kpi"><div className="label">Purchased this month</div><div className="value num">{num(purchasedMonth)}</div></div>
           <div className="card kpi ok"><div className="label">Paid this month</div><div className="value num">{num(paidMonth)}</div></div>
         </div>
+        {diffInvoices.length > 0 && <Card kind="danger" title={`They owe us · posting differences · ${num(diffPending)}`} right={<span className="help">paid in full, but less was posted in POS</span>}>
+          {diffInvoices.map((i) => <div className="row" key={i.id}><div className="grow"><span className="t">Inv {i.invoice_no} · invoice {num(i.amount)} · posted {num(i.posted_amount)}</span><span className="s">{i.post_diff_kind ? api.DIFF_KIND_LABEL[i.post_diff_kind] : ''}{i.post_diff_note ? ` · ${i.post_diff_note}` : ''}{i.diff_settled > 0 ? ` · ${num(i.diff_settled)} already settled` : ''}</span></div><span className="amt num danger">{num(i.diff_pending)}</span>{(profile.role === 'owner' || profile.role === 'manager') && <Button size="sm" kind="primary" onClick={() => setSettle(i)}>Settle…</Button>}</div>)}
+        </Card>}
         <Card title="Ledger">
           {rows.length === 0 ? <Empty>No invoices yet</Empty> : rows.map((r, idx) => {
             if (r.kind === 'invoice') return <div className="row" key={idx}><div className="datebox"><b>{fmtShort(r.day).split(' ')[0]}</b><span>{fmtShort(r.day).split(' ')[1].toUpperCase()}</span></div><div className="grow"><span className="t">Stock · Inv {r.inv.invoice_no}{!r.inv.posted_in_pos && <> · <span className="danger">not posted in POS</span></>}</span><span className="s">{r.inv.remaining <= 0 ? <span className="ok">Paid in full</span> : r.inv.installments_planned ? <span className="warn">Installments {r.inv.payments_made}/{r.inv.installments_planned} · {num(r.inv.remaining)} left{r.inv.next_due ? ` · next ${fmtShort(r.inv.next_due)}` : ''}</span> : r.inv.paid > 0 ? <span className="warn">Part paid · {num(r.inv.remaining)} left</span> : <span className="warn">Pending {num(r.inv.remaining)}</span>} · {who(r.inv.entered_by)}</span></div><span style={{ display: 'flex', gap: 4 }}><ProofLink storagePath={ph(r.inv.photo_id)} />{r.inv.remaining > 0 && <button type="button" className="btn ghost sm" onClick={() => setReminder(r.inv)} title="Set reminder"><Icon.Bell size={14} /></button>}{isOwner && <Link className="btn ghost sm" to={`?edit=invoices:${r.inv.id}`}>Edit</Link>}</span><span className="amt num">{num(r.inv.amount)}</span></div>;
@@ -80,6 +88,7 @@ export function DistributorDetail() {
           })}
         </Card>
       </div>
+      {settle && <DiffSettleSheet invoice={settle} userId={profile.id} onClose={() => setSettle(null)} onSaved={() => { setSettle(null); useStore.getState().bump(); }} />}
       {reminder && <ReminderSheet invoice={reminder} onClose={() => setReminder(null)} />}
     </>
   );

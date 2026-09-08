@@ -6,7 +6,7 @@ export type Profile = { id: string; name: string; role: Role; phone: string | nu
 export type AccountKind = 'cash_drawer' | 'card_machine' | 'wallet' | 'bank' | 'owner_personal' | 'waw_fs';
 export type Account = { id: string; name: string; kind: AccountKind; provider: string | null; active: boolean; sort_order: number };
 export type Distributor = { id: string; name: string; rep_name: string | null; phone: string | null; delivery_days: string | null; opening_balance: number; active: boolean };
-export type DistributorBalance = { id: string; name: string; pending: number; open_invoices: number; oldest_open: string | null };
+export type DistributorBalance = { id: string; name: string; pending: number; open_invoices: number; oldest_open: string | null; diff_pending: number };
 export type Customer = { id: string; name: string; phone: string | null; note: string | null; active: boolean };
 export type CustomerBalance = { id: string; name: string; phone: string | null; owed: number; since: string | null };
 export type ExpenseCategory = { id: string; name: string; active: boolean; sort_order: number };
@@ -14,8 +14,12 @@ export type BusinessDay = { day: string; opening_cash: number; status: 'open' | 
 export type DailySale = { id: string; day: string; pos_total: number; credit_total: number; photo_id: string; pos_source: 'pos' | 'count'; counted_cash: number | null; denominations: Record<string, number> | null; entered_by: string; device: string | null; created_at: string };
 export type SaleReceipt = { id: string; day: string; account_id: string; amount: number; note: string | null; photo_id: string; entered_by: string; device: string | null; created_at: string };
 export type DailySaleLine = { id: string; daily_sale_id: string; account_id: string; amount: number; photo_id: string };
-export type Invoice = { id: string; distributor_id: string; invoice_no: string; invoice_date: string | null; day: string; amount: number; photo_id: string; posted_in_pos: boolean; posted_at: string | null; posted_by: string | null; installments_planned: number | null; next_due: string | null; note: string | null; entered_by: string; device: string | null; created_at: string };
-export type InvoiceStatus = Invoice & { paid: number; remaining: number; payments_made: number; distributor_name: string };
+export type Invoice = { id: string; distributor_id: string; invoice_no: string; invoice_date: string | null; day: string; amount: number; photo_id: string; posted_in_pos: boolean; posted_at: string | null; posted_by: string | null; posted_amount: number | null; post_diff_kind: DiffKind | null; post_diff_note: string | null; unposted_reason: string | null; unposted_reason_day: string | null; unposted_reason_by: string | null; installments_planned: number | null; next_due: string | null; note: string | null; entered_by: string; device: string | null; created_at: string };
+export type DiffKind = 'short_items' | 'rate_difference' | 'damaged' | 'other';
+export const DIFF_KIND_LABEL: Record<DiffKind, string> = { short_items: 'Items short', rate_difference: 'Rate difference', damaged: 'Damaged / expired', other: 'Other' };
+export type InvoiceStatus = Invoice & { paid: number; remaining: number; payments_made: number; distributor_name: string; post_diff: number; diff_settled: number; diff_pending: number; unposted_reason_by_name: string | null };
+export type DiffSettlement = { id: string; invoice_id: string; day: string; kind: 'goods_received' | 'credit_note' | 'refund' | 'adjusted'; amount: number; note: string | null; photo_id: string; entered_by: string; device: string | null; created_at: string };
+export type ClosingBlocker = { id: string; invoice_no: string; distributor_name: string; amount: number; day: string; unposted_reason: string | null; unposted_reason_day: string | null };
 export type Payment = { id: string; invoice_id: string; day: string; amount: number; account_id: string; cash_source: 'today' | 'yesterday' | 'not_cash'; installment_no: number | null; photo_id: string; requested_by: string | null; entered_by: string; device: string | null; created_at: string };
 export type Expense = { id: string; day: string; category_id: string; amount: number; note: string | null; account_id: string; cash_source: string; photo_id: string; entered_by: string; device: string | null; created_at: string };
 export type StaffEntryKind = 'advance_sale_cash' | 'advance_purchase_cash' | 'medicine_credit' | 'salary_deduction' | 'cash_repayment';
@@ -38,6 +42,7 @@ export type RangeSummary = {
   purchases_received: number; purchases_paid: number; expenses: number; expenses_by_category: { name: string; amount: number }[];
   staff_advances: number; staff_recovered: number; owed_to_distributors: number; owed_by_customers: number; owed_by_staff: number; owed_to_waw: number; owed_to_owner: number;
   closings: { day: string; expected: number; counted: number; difference: number; closed_by: string; status: string; denominations: Record<string, number> | null }[];
+  distributor_diff_pending: number; unposted_invoices: number;
   days_closed: number; days_approved: number;
 };
 export type Photo = { id: string; storage_path: string; taken_by: string; taken_at: string; device: string | null };
@@ -67,7 +72,7 @@ export const listAccounts = async () => must(await supabase.from('accounts').sel
 export const addAccount = async (a: { name: string; kind: AccountKind; provider: string | null }) => must(await supabase.from('accounts').insert({ ...a, sort_order: 50 }).select('*').single()) as Account;
 export const listAllAccounts = async () => must(await supabase.from('accounts').select('*').order('sort_order')) as Account[];
 export const listDistributors = async () => must(await supabase.from('distributors').select('*').eq('active', true).order('name')) as Distributor[];
-export const distributorBalances = async () => (must(await supabase.from('v_distributor_balance').select('*').order('pending', { ascending: false })) as DistributorBalance[]).map((d) => numify(d, ['pending', 'open_invoices']));
+export const distributorBalances = async () => (must(await supabase.from('v_distributor_balance').select('*').order('pending', { ascending: false })) as DistributorBalance[]).map((d) => numify(d, ['pending', 'open_invoices', 'diff_pending']));
 export const addDistributor = async (d: Partial<Distributor>) => must(await supabase.from('distributors').insert(d).select('*').single()) as Distributor;
 export const updateDistributor = async (id: string, d: Partial<Distributor>) => must(await supabase.from('distributors').update(d).eq('id', id).select('*').single()) as Distributor;
 export const listCustomers = async () => must(await supabase.from('customers').select('*').eq('active', true).order('name')) as Customer[];
@@ -115,11 +120,15 @@ export const invoiceStatus = async (filter?: { distributor_id?: string; unpaid?:
   if (filter?.unpaid) q = q.gt('remaining', 0);
   if (filter?.unposted) q = q.eq('posted_in_pos', false);
   if (filter?.installments) q = q.not('installments_planned', 'is', null);
-  return (must(await q) as InvoiceStatus[]).map((i) => numify(i, ['amount', 'paid', 'remaining', 'payments_made']));
+  return (must(await q) as InvoiceStatus[]).map((i) => ({ ...numify(i, ['amount', 'paid', 'remaining', 'payments_made', 'post_diff', 'diff_settled', 'diff_pending']), posted_amount: i.posted_amount === null ? null : n(i.posted_amount) }));
 };
-export const getInvoice = async (id: string) => numify(must(await supabase.from('v_invoice_status').select('*').eq('id', id).single()) as InvoiceStatus, ['amount', 'paid', 'remaining', 'payments_made']);
+export const getInvoice = async (id: string) => numify(must(await supabase.from('v_invoice_status').select('*').eq('id', id).single()) as InvoiceStatus, ['amount', 'paid', 'remaining', 'payments_made', 'post_diff', 'diff_settled', 'diff_pending']);
 export const addInvoice = async (i: { distributor_id: string; invoice_no: string; day: string; amount: number; photo_id: string; invoice_date?: string | null; installments_planned?: number | null; next_due?: string | null; note?: string | null; posted_in_pos?: boolean }) => must(await supabase.from('invoices').insert(i).select('*').single()) as Invoice;
-export const markPosted = async (id: string) => must(await supabase.rpc('mark_posted', { p_invoice: id }));
+export const markPosted = async (id: string, postedAmount?: number | null, diffKind?: DiffKind | null, diffNote?: string | null) => must(await supabase.rpc('mark_posted', { p_invoice: id, p_posted_amount: postedAmount ?? null, p_diff_kind: diffKind ?? null, p_diff_note: diffNote ?? null }));
+export const giveUnpostedReason = async (id: string, day: string, reason: string) => must(await supabase.rpc('give_unposted_reason', { p_invoice: id, p_day: day, p_reason: reason }));
+export const closingBlockers = async (day: string) => { const r = must(await supabase.rpc('closing_blockers', { p_day: day })) as ClosingBlocker[] | ClosingBlocker | null; const rows = r === null ? [] : Array.isArray(r) ? r : [r]; return rows.map((b) => numify(b, ['amount'])); };
+export const listDiffSettlements = async (invoiceId?: string) => { let q = supabase.from('invoice_diff_settlements').select('*').order('day', { ascending: false }); if (invoiceId) q = q.eq('invoice_id', invoiceId); return (must(await q) as DiffSettlement[]).map((x) => numify(x, ['amount'])); };
+export const addDiffSettlement = async (x: { invoice_id: string; day: string; kind: DiffSettlement['kind']; amount: number; note?: string | null; photo_id: string }) => must(await supabase.from('invoice_diff_settlements').insert(x).select('*').single()) as DiffSettlement;
 export const listPayments = async (filter: { invoice_id?: string; distributor_id?: string; from?: string; to?: string; account_kind?: AccountKind }) => {
   let q = supabase.from('payments').select('*').order('day', { ascending: false }).order('created_at', { ascending: false });
   if (filter.invoice_id) q = q.eq('invoice_id', filter.invoice_id);
@@ -169,7 +178,7 @@ export const nonCashPool = async (from: string, to: string) => {
 export const rangeSummary = async (from: string, to: string) => {
   const s = must(await supabase.rpc('range_summary', { p_from: from, p_to: to })) as RangeSummary;
   const out: RangeSummary = { ...s };
-  for (const k of ['pos_total', 'cash', 'credit_given', 'credit_collected', 'purchases_received', 'purchases_paid', 'expenses', 'staff_advances', 'staff_recovered', 'owed_to_distributors', 'owed_by_customers', 'owed_by_staff', 'owed_to_waw', 'owed_to_owner', 'days_closed', 'days_approved'] as const) (out as unknown as Record<string, number>)[k] = n(s[k]);
+  for (const k of ['pos_total', 'cash', 'credit_given', 'credit_collected', 'purchases_received', 'purchases_paid', 'expenses', 'staff_advances', 'staff_recovered', 'owed_to_distributors', 'owed_by_customers', 'owed_by_staff', 'owed_to_waw', 'owed_to_owner', 'distributor_diff_pending', 'unposted_invoices', 'days_closed', 'days_approved'] as const) (out as unknown as Record<string, number>)[k] = n(s[k]);
   out.by_account = (s.by_account || []).map((a) => ({ ...a, amount: n(a.amount) }));
   out.expenses_by_category = (s.expenses_by_category || []).map((a) => ({ ...a, amount: n(a.amount) }));
   out.closings = (s.closings || []).map((c) => ({ ...c, expected: n(c.expected), counted: n(c.counted), difference: n(c.difference) }));

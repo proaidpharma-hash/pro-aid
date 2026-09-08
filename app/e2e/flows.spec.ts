@@ -289,6 +289,7 @@ test('owner corrects an expense with a reason; staff advance; WAW loan; reminder
   await toastSeen(page, 'Reminder set');
   await page.goto('/insights');
   await expect(page.locator('.content')).toContainText('Total sale');
+  await expect(page.locator('.content')).toContainText('Extra cash above the POS sale');
   await expect(page.locator('.content')).toContainText('1,04,350');
   await expect(page.locator('.content')).toContainText('Owed to WAW F/S');
   // the day was unlocked earlier: close it again (owner may close) and approve

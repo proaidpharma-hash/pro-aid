@@ -3,6 +3,5 @@ dist/
 .storage/
 app/test-results/
 app/playwright-report/
-app/.env.production
 app/shot*.mjs
 *.log

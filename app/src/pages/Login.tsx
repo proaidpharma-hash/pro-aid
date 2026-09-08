@@ -1,6 +1,8 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { signIn, isValidPin, isValidPhone } from '../lib/auth';
+import { signIn, isValidPin, isValidPhone, createStaffLogin } from '../lib/auth';
+import { supabase } from '../lib/supabase';
+import { useEffect } from 'react';
 import { useStore } from '../lib/store';
 import { Icon, Field, Button } from '../components/ui';
 
@@ -9,7 +11,10 @@ export default function Login() {
   const [pin, setPin] = useState('');
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [setup, setSetup] = useState(false);
+  const [name, setName] = useState('');
   const navigate = useNavigate();
+  useEffect(() => { supabase.rpc('setup_needed').then(({ data }) => setSetup(data === true)); }, []);
   const loadProfile = useStore((s) => s.loadProfile);
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -17,7 +22,10 @@ export default function Login() {
     if (!isValidPhone(phone)) return setErr('Enter your phone number, e.g. 03001234567');
     if (!isValidPin(pin)) return setErr('PIN is 6 digits');
     setBusy(true);
-    try { await signIn(phone, pin); await loadProfile(); navigate('/'); } catch (e) { setErr((e as Error).message); } finally { setBusy(false); }
+    try {
+      if (setup) { if (!name.trim()) throw new Error('Enter your name'); await createStaffLogin({ name: name.trim(), phone, pin, role: 'owner' }); }
+      await signIn(phone, pin); await loadProfile(); navigate('/');
+    } catch (e) { setErr((e as Error).message); } finally { setBusy(false); }
   };
   return (
     <div style={{ minHeight: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 28 }}>
@@ -27,11 +35,13 @@ export default function Login() {
           <div style={{ fontSize: 26, fontWeight: 800, letterSpacing: '-0.02em' }}>Pro Aid</div>
           <div className="muted" style={{ fontWeight: 600 }}>Pharmacy cash control</div>
         </div>
+        {setup && <div className="notice info">First-time setup: create the owner login. This works only once, until the first owner exists.</div>}
+        {setup && <Field label="Your name"><input className="input" value={name} onChange={(e) => setName(e.target.value)} placeholder="Ayan Khalid" /></Field>}
         <Field label="Phone number"><input className="input" inputMode="tel" autoComplete="username" placeholder="03001234567" value={phone} onChange={(e) => setPhone(e.target.value)} autoFocus /></Field>
         <Field label="PIN (6 digits)"><input className="input num" type="password" inputMode="numeric" autoComplete="current-password" maxLength={6} placeholder="••••••" value={pin} onChange={(e) => setPin(e.target.value.replace(/\D/g, ''))} style={{ letterSpacing: 6, fontSize: 22 }} /></Field>
         {err && <div className="notice danger">{err}</div>}
-        <Button kind="primary" size="big" type="submit" disabled={busy}>{busy ? 'Signing in…' : 'Sign in'}</Button>
-        <div className="help" style={{ textAlign: 'center' }}>Accounts are created by the owner. Forgot your PIN? Ask the owner to reset it.</div>
+        <Button kind="primary" size="big" type="submit" disabled={busy}>{busy ? 'Please wait…' : setup ? 'Create owner & sign in' : 'Sign in'}</Button>
+        <div className="help" style={{ textAlign: 'center' }}>{setup ? 'Choose a 6-digit PIN you will remember.' : 'Accounts are created by the owner.'} Forgot your PIN? Ask the owner to reset it.</div>
       </form>
     </div>
   );

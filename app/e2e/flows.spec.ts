@@ -382,6 +382,33 @@ test('owner creates a new cashier login and the new user can sign in', async ({ 
   await page.click('button:has-text("Sign in")');
   await page.waitForURL(/\/$/);
   await expect(page.locator('.sidebar')).toContainText('Cashier · Kashif');
+  // Kashif changes his own PIN (current PIN required)
+  await page.goto('/pin');
+  await page.getByTestId('pin-current').fill('000000');
+  await page.getByTestId('pin-new').fill('556677');
+  await page.getByTestId('pin-again').fill('556677');
+  await page.getByTestId('pin-save').click();
+  await toastSeen(page, 'Current PIN is wrong');
+  await page.getByTestId('pin-current').fill('445566');
+  await page.getByTestId('pin-save').click();
+  await toastSeen(page, 'PIN changed');
+  // owner resets it again from Settings; the old one stops working
+  await signOut(page);
+  await signIn(page, 'owner');
+  await page.goto('/settings');
+  await page.getByTestId('reset-pin-03004567890').click();
+  await page.getByTestId('new-pin').fill('998877');
+  await page.getByTestId('new-pin-save').click();
+  await toastSeen(page, 'PIN reset');
+  await signOut(page);
+  await page.fill('input[inputmode="tel"]', '03004567890');
+  await page.fill('input[type="password"]', '556677');
+  await page.click('button:has-text("Sign in")');
+  await expect(page.locator('.notice.danger')).toContainText('Phone number or PIN is wrong');
+  await page.fill('input[type="password"]', '998877');
+  await page.click('button:has-text("Sign in")');
+  await page.waitForURL(/\/$/);
+  await expect(page.locator('.sidebar')).toContainText('Cashier · Kashif');
 });
 
 test('count-first: manager counts the drawer and the app works the sale out, closing is prefilled', async ({ page }) => {

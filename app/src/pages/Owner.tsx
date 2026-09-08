@@ -6,7 +6,7 @@ import { denominationsText } from '../components/ui';
 import { useStore, useIsOwner } from '../lib/store';
 import * as api from '../lib/api';
 import { today, num, fmtShort, fmtDay, fmtDateTime } from '../lib/format';
-import { createStaffLogin, isValidPhone, isValidPin } from '../lib/auth';
+import { createStaffLogin, isValidPhone, isValidPin, resetPin, changeOwnPin } from '../lib/auth';
 import { SettleSheet } from './Ledgers';
 import { exportReportPdf } from '../lib/pdf';
 
@@ -219,6 +219,7 @@ export function ReportsPage() {
 
 // ---- Settings --------------------------------------------------------------------
 export function SettingsPage() {
+  const profileId = useStore((s) => s.profile?.id);
   const isOwner = useIsOwner();
   const toast = useStore((s) => s.toast);
   const refreshKey = useStore((s) => s.refreshKey);
@@ -235,6 +236,8 @@ export function SettingsPage() {
   const [addAcc, setAddAcc] = useState(false);
   const [na, setNa] = useState({ name: '', kind: 'wallet' as api.AccountKind, provider: '' });
   const [addStaff, setAddStaff] = useState(false);
+  const [resetFor, setResetFor] = useState<api.Profile | null>(null);
+  const [newPin, setNewPin] = useState('');
   const [ns, setNs] = useState({ name: '', phone: '' });
   const [busy, setBusy] = useState(false);
   useEffect(() => { if (!isOwner) return; Promise.all([api.listProfiles(), api.listDevices(), api.auditLog(range.from, range.to), api.listDays(range.from, range.to), api.listAllAccounts(), api.listDistributors()]).then(([p, d, a, bd, ac, ds]) => { setProfiles(p); setDevices(d); setAudit(a); setDays(bd); setAccounts(ac); setDists(ds); }).catch((e) => toast((e as Error).message, 'danger')); }, [isOwner, refreshKey, toast, range.from, range.to]);
@@ -248,6 +251,12 @@ export function SettingsPage() {
     if (!ns.name.trim()) return toast('A name is needed', 'danger');
     setBusy(true);
     try { await api.addStaffMember(ns.name.trim(), ns.phone.trim() || undefined); toast(`${ns.name} added — credit bills and advances can now go to their account`, 'ok'); setAddStaff(false); setNs({ name: '', phone: '' }); useStore.getState().bump(); } catch (e) { toast((e as Error).message, 'danger'); } finally { setBusy(false); }
+  };
+  const doReset = async () => {
+    if (!resetFor || !isValidPin(newPin)) return toast('New PIN must be 6 digits', 'danger');
+    if (!resetFor.phone) return toast('This user has no phone number', 'danger');
+    setBusy(true);
+    try { await resetPin(resetFor.id, resetFor.phone, newPin); toast(`PIN reset — ${resetFor.name} signs in with the new PIN from now`, 'ok'); setResetFor(null); setNewPin(''); useStore.getState().bump(); } catch (e) { toast((e as Error).message, 'danger'); } finally { setBusy(false); }
   };
   const toggleActive = async (p: api.Profile) => { try { await api.upsertProfile({ id: p.id, name: p.name, role: p.role, phone: p.phone ?? '', active: !p.active }); useStore.getState().bump(); } catch (e) { toast((e as Error).message, 'danger'); } };
   const createAccount = async () => {
@@ -263,9 +272,9 @@ export function SettingsPage() {
       <div className="content">
         {tab === 'users' && <div className="grid grid-2 stack">
           <Card title="Users & staff" right={<><Button size="sm" onClick={() => setAddStaff(true)} data-testid="add-staff">+ Staff (no login)</Button><Button kind="primary" size="sm" onClick={() => setAddUser(true)}>+ Add login</Button></>}>
-            <div className="scroll-x"><table className="table"><thead><tr><th>Name</th><th>Role</th><th>Phone</th><th>Devices</th><th></th></tr></thead><tbody>{profiles.map((p) => <tr key={p.id} style={{ opacity: p.active ? 1 : 0.5 }}><td><b>{p.name}</b></td><td><Pill kind={p.role === 'owner' ? 'accent' : p.role === 'manager' ? 'warn' : 'neutral'}>{p.role === 'staff' ? 'staff · no login' : p.role}</Pill></td><td className="num">{p.phone ?? '—'}</td><td className="muted">{p.has_login === false ? 'account only — cannot sign in' : devices.filter((d) => d.user_id === p.id).map((d) => `${d.label} · ${fmtDateTime(d.last_seen)}`).join(', ') || '—'}</td><td>{p.role !== 'owner' && <Button size="sm" onClick={() => toggleActive(p)}>{p.active ? 'Disable' : 'Enable'}</Button>}</td></tr>)}</tbody></table></div>
+            <div className="scroll-x"><table className="table"><thead><tr><th>Name</th><th>Role</th><th>Phone</th><th>Devices</th><th></th></tr></thead><tbody>{profiles.map((p) => <tr key={p.id} style={{ opacity: p.active ? 1 : 0.5 }}><td><b>{p.name}</b></td><td><Pill kind={p.role === 'owner' ? 'accent' : p.role === 'manager' ? 'warn' : 'neutral'}>{p.role === 'staff' ? 'staff · no login' : p.role}</Pill></td><td className="num">{p.phone ?? '—'}</td><td className="muted">{p.has_login === false ? 'account only — cannot sign in' : devices.filter((d) => d.user_id === p.id).map((d) => `${d.label} · ${fmtDateTime(d.last_seen)}`).join(', ') || '—'}</td><td><span style={{ display: 'flex', gap: 4 }}>{p.has_login !== false && p.id !== profileId && <Button size="sm" onClick={() => { setResetFor(p); setNewPin(''); }} data-testid={`reset-pin-${p.phone}`}>Reset PIN</Button>}{p.role !== 'owner' && <Button size="sm" onClick={() => toggleActive(p)}>{p.active ? 'Disable' : 'Enable'}</Button>}</span></td></tr>)}</tbody></table></div>
             <div className="help">Staff without a login (helpers, salesmen) still get an account: their credit bills and advances are recorded against them, but they cannot open the app.</div>
-            <div className="help">To reset someone's PIN: disable the user, add them again with a new PIN, or reset it from the Supabase dashboard (Authentication → Users).</div>
+            <div className="help">Forgot PIN? Reset it here — the change is logged in the audit log. Your own PIN: More → Change my PIN.</div>
           </Card>
           <Card title="What each role can do">
             <div className="scroll-x"><table className="table"><thead><tr><th></th><th style={{ textAlign: 'center' }}>Cashier</th><th style={{ textAlign: 'center' }}>Manager</th><th style={{ textAlign: 'center' }}>Owner</th></tr></thead><tbody>
@@ -283,6 +292,11 @@ export function SettingsPage() {
         <Field label="Type"><Chips options={[{ value: 'card_machine', label: 'Card machine' }, { value: 'wallet', label: 'Wallet (EasyPaisa, JazzCash…)' }, { value: 'bank', label: 'Bank account' }]} value={na.kind} onChange={(v) => setNa({ ...na, kind: v })} /></Field>
         <Field label="Bank / provider (optional)"><input className="input" value={na.provider} onChange={(e) => setNa({ ...na, provider: e.target.value })} placeholder="e.g. Meezan" /></Field>
         <Button kind="primary" size="big" disabled={busy} onClick={createAccount} data-testid="account-save">Add account</Button>
+      </Sheet>}
+      {resetFor && <Sheet title={`Reset PIN · ${resetFor.name}`} onClose={() => setResetFor(null)}>
+        <Notice kind="warn">The old PIN stops working immediately. Tell {resetFor.name.split(' ')[0]} the new PIN in person — never by message.</Notice>
+        <Field label="New PIN (6 digits)"><input className="input num" inputMode="numeric" maxLength={6} value={newPin} onChange={(e) => setNewPin(e.target.value.replace(/\D/g, ''))} data-testid="new-pin" /></Field>
+        <Button kind="primary" size="big" disabled={busy || !isValidPin(newPin)} onClick={doReset} data-testid="new-pin-save">Reset PIN</Button>
       </Sheet>}
       {addStaff && <Sheet title="Add staff member (no login)" onClose={() => setAddStaff(false)}>
         <Notice kind="info">For lower-level staff who don't use the app. Their medicine on credit and cash advances are tracked under Staff accounts.</Notice>
@@ -346,7 +360,33 @@ export function MoreHub() {
     {profile.role !== 'cashier' && <Link className="row" to="/sales" style={{ color: 'inherit' }}><div className="avatar"><Icon.Sales /></div><div className="grow"><span className="t">Daily sale</span><span className="s">breakdown by day</span></div></Link>}
     {profile.role !== 'cashier' && <Link className="row" to="/reports" style={{ color: 'inherit' }}><div className="avatar"><Icon.Reports /></div><div className="grow"><span className="t">Reports</span><span className="s">any period, PDF with photos</span></div></Link>}
     {profile.role === 'owner' && <Link className="row" to="/insights" style={{ color: 'inherit' }}><div className="avatar"><Icon.Insights /></div><div className="grow"><span className="t">Insights</span><span className="s">ask any date range</span></div></Link>}
+    <Link className="row" to="/pin" style={{ color: 'inherit' }}><div className="avatar"><Icon.Lock /></div><div className="grow"><span className="t">Change my PIN</span><span className="s">current PIN needed</span></div></Link>
     {profile.role === 'owner' && <Link className="row" to="/settings" style={{ color: 'inherit' }}><div className="avatar"><Icon.Settings /></div><div className="grow"><span className="t">Settings</span><span className="s">users, roles, audit log</span></div></Link>}
     <a className="row" href="#" style={{ color: 'inherit' }} onClick={async (e) => { e.preventDefault(); const { signOut } = await import('../lib/auth'); await signOut(); location.href = '/login'; }}><div className="avatar danger"><Icon.X /></div><div className="grow"><span className="t">Sign out</span></div></a>
   </Card></div></>;
+}
+
+// Anyone changes their own PIN (current PIN required)
+export function ChangePinPage() {
+  const profile = useStore((s) => s.profile)!;
+  const toast = useStore((s) => s.toast);
+  const [cur, setCur] = useState('');
+  const [next, setNext] = useState('');
+  const [again, setAgain] = useState('');
+  const [busy, setBusy] = useState(false);
+  const ok = isValidPin(cur) && isValidPin(next) && next === again && next !== cur;
+  const save = async () => {
+    if (!ok || !profile.phone) return;
+    setBusy(true);
+    try { await changeOwnPin(profile.phone, cur, next); toast('PIN changed', 'ok'); setCur(''); setNext(''); setAgain(''); } catch (e) { toast((e as Error).message, 'danger'); } finally { setBusy(false); }
+  };
+  return <><TopBar title="Change my PIN" sub={profile.name} back /><div className="content"><div className="form" style={{ maxWidth: 420 }}>
+    <Card>
+      <Field label="Current PIN"><input className="input num" type="password" inputMode="numeric" maxLength={6} value={cur} onChange={(e) => setCur(e.target.value.replace(/\D/g, ''))} data-testid="pin-current" /></Field>
+      <Field label="New PIN (6 digits)"><input className="input num" type="password" inputMode="numeric" maxLength={6} value={next} onChange={(e) => setNext(e.target.value.replace(/\D/g, ''))} data-testid="pin-new" /></Field>
+      <Field label="New PIN again" error={again && again !== next ? 'Does not match' : undefined}><input className="input num" type="password" inputMode="numeric" maxLength={6} value={again} onChange={(e) => setAgain(e.target.value.replace(/\D/g, ''))} data-testid="pin-again" /></Field>
+      <Button kind="primary" size="big" disabled={!ok || busy} onClick={save} data-testid="pin-save">{busy ? 'Saving…' : 'Change PIN'}</Button>
+    </Card>
+    <div className="help">Never share your PIN. The app locks itself after 15 minutes without use.</div>
+  </div></div></>;
 }

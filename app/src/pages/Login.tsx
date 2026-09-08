@@ -1,13 +1,14 @@
 import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { signIn, isValidPin, isValidPhone, createStaffLogin } from '../lib/auth';
+import { useNavigate, useSearchParams } from 'react-router-dom';
+import { signIn, isValidPin, isValidPhone, createStaffLogin, lockedForSeconds } from '../lib/auth';
 import { supabase } from '../lib/supabase';
 import { useEffect } from 'react';
 import { useStore } from '../lib/store';
 import { Icon, Field, Button } from '../components/ui';
 
 export default function Login() {
-  const [phone, setPhone] = useState('');
+  const [params] = useSearchParams();
+  const [phone, setPhone] = useState(() => { try { return localStorage.getItem('proaid.phone') || ''; } catch { return ''; } });
   const [pin, setPin] = useState('');
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -24,7 +25,7 @@ export default function Login() {
     setBusy(true);
     try {
       if (setup) { if (!name.trim()) throw new Error('Enter your name'); await createStaffLogin({ name: name.trim(), phone, pin, role: 'owner' }); }
-      await signIn(phone, pin); await loadProfile(); navigate('/');
+      await signIn(phone, pin); try { localStorage.setItem('proaid.phone', phone); } catch { /* ignore */ } await loadProfile(); navigate('/');
     } catch (e) { setErr((e as Error).message); } finally { setBusy(false); }
   };
   return (
@@ -35,6 +36,8 @@ export default function Login() {
           <div style={{ fontSize: 26, fontWeight: 800, letterSpacing: '-0.02em' }}>Pro Aid</div>
           <div className="muted" style={{ fontWeight: 600 }}>Pharmacy cash control</div>
         </div>
+        {params.get('locked') && <div className="notice info">Locked after 15 minutes without use — sign in again.</div>}
+        {lockedForSeconds() > 0 && <div className="notice danger">Too many wrong attempts — wait {lockedForSeconds()} seconds.</div>}
         {setup && <div className="notice info">First-time setup: create the owner login. This works only once, until the first owner exists.</div>}
         {setup && <Field label="Your name"><input className="input" value={name} onChange={(e) => setName(e.target.value)} placeholder="Ayan Khalid" /></Field>}
         <Field label="Phone number"><input className="input" inputMode="tel" autoComplete="username" placeholder="03001234567" value={phone} onChange={(e) => setPhone(e.target.value)} autoFocus /></Field>

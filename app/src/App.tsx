@@ -9,7 +9,7 @@ import { SaleNew, SalesPage, ReceiptNew, CreditBillNew } from './pages/Sale';
 import Closing from './pages/Closing';
 import { PurchasesPage, PurchaseNew, PayPage, ExpenseNew, ExpensesPage } from './pages/Purchases';
 import { DistributorsPage, DistributorDetail, CustomersPage, StaffPage, StaffDetail, WawPage } from './pages/Ledgers';
-import { NonCashPage, InsightsPage, ReportsPage, SettingsPage, NotificationsPage, LedgersHub, MoreHub } from './pages/Owner';
+import { NonCashPage, InsightsPage, ReportsPage, SettingsPage, NotificationsPage, LedgersHub, MoreHub, ChangePinPage } from './pages/Owner';
 
 function Guard({ roles, children }: { roles?: string[]; children: React.ReactElement }) {
   const profile = useStore((s) => s.profile);
@@ -56,6 +56,7 @@ export default function App() {
           <Route path="/notifications" element={<NotificationsPage />} />
           <Route path="/ledgers" element={<LedgersHub />} />
           <Route path="/more" element={<MoreHub />} />
+          <Route path="/pin" element={<ChangePinPage />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Route>
       </Routes>

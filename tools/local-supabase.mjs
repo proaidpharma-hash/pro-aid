@@ -121,6 +121,7 @@ async function withTx(req, fn) {
     await client.query("select set_config('role', $1, true)", [u ? 'authenticated' : 'anon']);
     await client.query('set local role ' + (u ? 'authenticated' : 'anon'));
     await client.query("select set_config('app.uid', $1, true)", [u ? u.sub : '']);
+    await client.query("select set_config('request.jwt.claims', $1, true)", [JSON.stringify(u ? { sub: u.sub, role: 'authenticated' } : { role: 'anon' })]);
     const headers = {};
     for (const h of ['x-device', 'x-reason']) if (req.headers[h]) headers[h] = req.headers[h];
     await client.query("select set_config('request.headers', $1, true)", [JSON.stringify(headers)]);

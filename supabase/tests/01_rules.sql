@@ -32,7 +32,8 @@ begin
 end $$;
 
 create or replace function t_as(uid uuid, dev text default 'test device') returns void language sql as $$
-  select set_config('app.uid', uid::text, false), set_config('app.device', dev, false), set_config('app.reason', '', false)
+  select set_config('app.uid', uid::text, false), set_config('app.device', dev, false), set_config('app.reason', '', false),
+         set_config('request.jwt.claims', json_build_object('sub', uid, 'role', 'authenticated')::text, false)
 $$;
 
 -- fresh photo helper: every entry needs its own proof
@@ -401,3 +402,25 @@ select t_ok((select denominations->>'5000' from submit_closing('2026-09-12', 300
 select t_ok((select (x->'denominations'->>'5000')::int from jsonb_array_elements(range_summary('2026-09-12','2026-09-12')->'closings') x) = 6, 'reports carry the breakdown');
 reset role;
 select 'ALL RULE TESTS PASSED (incl. denominations)' as result;
+
+-- ---------------------------------------------------------------------------
+-- 12. security hardening
+-- ---------------------------------------------------------------------------
+set role app_user;
+select t_as(:cashier);
+select t_expect_error($q$ select notify_users(array['00000000-0000-0000-0000-000000000001'::uuid], 'closing_submitted', 'fake', 'x', null, null) $q$, '42501', 'staff cannot forge a notification');
+select t_expect_error($q$ select notify_owners('closing_minus', 'fake minus', 'x', null, null) $q$, '42501', 'staff cannot forge an owner alert');
+select t_expect_error($q$ select run_daily_jobs() $q$, '42501', 'staff cannot run the daily jobs');
+select t_expect_error($q$ select reset_login_pin('00000000-0000-0000-0000-000000000002', 'abcdefghijklmnopqrstuvwxyz') $q$, '42501', 'staff cannot reset a PIN');
+select t_as(:owner);
+select t_expect_error($q$ select reset_login_pin('00000000-0000-0000-0000-000000000001', 'abcdefghijklmnopqrstuvwxyz') $q$, 'PA050', 'owner changes own PIN elsewhere');
+select reset_login_pin('00000000-0000-0000-0000-000000000002', 'abcdefghijklmnopqrstuvwxyz0123456789');
+select t_ok((select count(*) from audit_log where action = 'reset_pin' and row_id = '00000000-0000-0000-0000-000000000002') = 1, 'PIN reset is audited');
+reset role;
+select t_ok((select encrypted_password = crypt('abcdefghijklmnopqrstuvwxyz0123456789', encrypted_password) from auth.users where id = '00000000-0000-0000-0000-000000000002'), 'new PIN stored as bcrypt like Supabase Auth');
+-- anonymous role: only the setup check is callable
+select t_ok(has_function_privilege('anon', 'setup_needed()', 'execute'), 'anon may check setup');
+select t_ok(not has_function_privilege('anon', 'cash_book(date)', 'execute') and not has_function_privilege('anon', 'notify_users(uuid[], notification_kind, text, text, text, uuid)', 'execute') and not has_function_privilege('anon', 'range_summary(date, date)', 'execute'), 'anon cannot call the API');
+select t_ok(not has_function_privilege('authenticated', 'record_payment_impl(uuid, date, numeric, uuid, cash_source, uuid, uuid)', 'execute'), 'internal implementations are not callable');
+select t_ok((select bool_and(relrowsecurity) from pg_class where relnamespace = 'public'::regnamespace and relkind = 'r'), 'row-level security is on for every table');
+select 'ALL RULE TESTS PASSED (incl. security)' as result;

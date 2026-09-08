@@ -1,6 +1,6 @@
 -- Local-only stand-in for Supabase's auth schema (never run on Supabase)
 create schema if not exists auth;
-create table if not exists auth.users (id uuid primary key, email text, phone text);
+create table if not exists auth.users (id uuid primary key, email text, phone text, encrypted_password text, updated_at timestamptz);
 create or replace function auth.uid() returns uuid language sql stable as $$
   select nullif(current_setting('app.uid', true), '')::uuid
 $$;

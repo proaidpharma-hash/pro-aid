@@ -36,6 +36,19 @@ export function Shell() {
   useEffect(() => { startRealtime(); }, []);
   useEffect(() => { api.invoiceStatus({ unposted: true }).then((r) => setUnposted(r.length)).catch(() => undefined); }, [refreshKey]);
   useEffect(() => { supabase; }, []);
+  // auto-lock: after 15 minutes without a touch the session is signed out (shared pharmacy phones)
+  useEffect(() => {
+    const LIMIT = 15 * 60 * 1000;
+    let last = Date.now();
+    const touch = () => { last = Date.now(); };
+    const events = ['pointerdown', 'keydown', 'touchstart', 'scroll'];
+    events.forEach((e) => window.addEventListener(e, touch, { passive: true }));
+    const check = () => { if (Date.now() - last > LIMIT) { signOut().then(() => navigate('/login?locked=1')); } };
+    const timer = setInterval(check, 30_000);
+    const onVisible = () => { if (document.visibilityState === 'visible') check(); };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => { events.forEach((e) => window.removeEventListener(e, touch)); clearInterval(timer); document.removeEventListener('visibilitychange', onVisible); };
+  }, [navigate]);
   if (!profile) return null;
   const items = NAV.filter((n) => n.roles.includes(profile.role));
   return (
@@ -48,6 +61,7 @@ export function Shell() {
         <nav className="nav" style={{ marginTop: 'auto' }}>
           <NavLink to="/notifications"><span className="lbl"><Icon.Bell /> Notifications</span>{unread > 0 && <span className="badge danger">{unread}</span>}</NavLink>
           {profile.role === 'owner' && <NavLink to="/settings"><span className="lbl"><Icon.Settings /> Settings</span></NavLink>}
+          <NavLink to="/pin"><span className="lbl"><Icon.Lock /> Change my PIN</span></NavLink>
           <a href="#" onClick={(e) => { e.preventDefault(); signOut().then(() => navigate('/login')); }}><span className="lbl">Sign out</span></a>
         </nav>
       </aside>

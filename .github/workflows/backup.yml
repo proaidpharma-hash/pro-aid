@@ -15,11 +15,19 @@ jobs:
           PASS: ${{ secrets.BACKUP_PASSPHRASE }}
         run: |
           if [ -z "$DB_URL" ] || [ -z "$PASS" ]; then echo "::warning title=Backup skipped::set the SUPABASE_DB_URL and BACKUP_PASSPHRASE secrets to enable nightly backups"; exit 0; fi
-          sudo apt-get update -qq && sudo apt-get install -y -qq postgresql-client >/dev/null
+          fail() { echo "::error title=Backup failed::$1"; exit 1; }
+          # pg_dump must be at least the server's version: install the PostgreSQL apt repo and take the newest client
+          sudo install -d /usr/share/postgresql-common/pgdg
+          sudo curl -fsSL -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc https://www.postgresql.org/media/keys/ACCC4CF8.asc
+          echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" | sudo tee /etc/apt/sources.list.d/pgdg.list >/dev/null
+          sudo apt-get update -qq >/dev/null && sudo apt-get install -y -qq postgresql-client-17 >/dev/null || fail "could not install postgresql-client-17"
+          PGDUMP=/usr/lib/postgresql/17/bin/pg_dump
+          if ! out=$(psql "$DB_URL" -Atc "select version()" 2>&1); then fail "cannot connect to Supabase: ${out:0:300}"; fi
+          echo "server: $out"
           set -o pipefail
           name="proaid-$(date -u +%Y-%m-%d).sql.gz.enc"
-          pg_dump "$DB_URL" --schema=public --no-owner --no-privileges --data-only \
-            | gzip -9 | openssl enc -aes-256-cbc -pbkdf2 -iter 200000 -salt -pass env:PASS -out "$name"
+          if ! err=$( { $PGDUMP "$DB_URL" --schema=public --no-owner --no-privileges --data-only | gzip -9 | openssl enc -aes-256-cbc -pbkdf2 -iter 200000 -salt -pass env:PASS -out "$name"; } 2>&1 ); then fail "pg_dump: ${err:0:400}"; fi
+          [ -s "$name" ] || fail "empty backup file"
           ls -la "$name"
           echo "BACKUP_NAME=$name" >> "$GITHUB_ENV"
           echo "::notice title=Backup::$name written (data of every table, AES-256 encrypted; photos stay in Supabase Storage)"

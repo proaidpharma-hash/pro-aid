@@ -192,7 +192,7 @@ export function StaffPage() {
   return (
     <>
       <TopBar title="Staff accounts" sub={profile.role === 'owner' ? 'Advances and medicine on credit · added by the owner only' : 'Your account'} />
-      <div className="content"><Card>{!rows ? <Spinner /> : list.map((r) => <Link to={`/staff/${r.id}`} className="row" key={r.id} style={{ color: 'inherit' }}><div className="avatar">{initials(r.name)}</div><div className="grow"><span className="t">{r.name}</span><span className="s">{r.role}</span></div><span className={`amt num ${r.owed > 0 ? 'warn' : 'ok'}`}>{r.owed > 0 ? `owes ${num(r.owed)}` : 'Clear'}</span></Link>)}</Card></div>
+      <div className="content"><Card>{!rows ? <Spinner /> : list.map((r) => <Link to={`/staff/${r.id}`} className="row" key={r.id} style={{ color: 'inherit' }}><div className="avatar">{initials(r.name)}</div><div className="grow"><span className="t">{r.name}</span><span className="s">{r.role === 'staff' ? 'staff · no login' : r.role}{r.active ? '' : ' · disabled'}</span></div><span className={`amt num ${r.owed > 0 ? 'warn' : 'ok'}`}>{r.owed > 0 ? `owes ${num(r.owed)}` : 'Clear'}</span></Link>)}</Card></div>
     </>
   );
 }

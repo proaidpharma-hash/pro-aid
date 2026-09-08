@@ -218,7 +218,9 @@ export function SettingsPage() {
   const [accounts, setAccounts] = useState<api.Account[]>([]);
   const [dists, setDists] = useState<api.Distributor[]>([]);
   const [addUser, setAddUser] = useState(false);
-  const [nu, setNu] = useState({ name: '', phone: '', pin: '', role: 'cashier' as api.Role });
+  const [nu, setNu] = useState({ name: '', phone: '', pin: '', role: 'cashier' as 'cashier' | 'manager' | 'owner' });
+  const [addStaff, setAddStaff] = useState(false);
+  const [ns, setNs] = useState({ name: '', phone: '' });
   const [busy, setBusy] = useState(false);
   useEffect(() => { if (!isOwner) return; const f = new Date(); f.setDate(f.getDate() - 60); Promise.all([api.listProfiles(), api.listDevices(), api.auditLog(200), api.listDays(f.toISOString().slice(0, 10), today()), api.listAllAccounts(), api.listDistributors()]).then(([p, d, a, bd, ac, ds]) => { setProfiles(p); setDevices(d); setAudit(a); setDays(bd); setAccounts(ac); setDists(ds); }).catch((e) => toast((e as Error).message, 'danger')); }, [isOwner, refreshKey, toast]);
   if (!isOwner) return <><TopBar title="Settings" /><div className="content"><Notice kind="warn">Owner only</Notice></div></>;
@@ -226,6 +228,11 @@ export function SettingsPage() {
     if (!nu.name.trim() || !isValidPhone(nu.phone) || !isValidPin(nu.pin)) return toast('Name, a valid phone and a 6-digit PIN are needed', 'danger');
     setBusy(true);
     try { await createStaffLogin({ name: nu.name.trim(), phone: nu.phone, pin: nu.pin, role: nu.role }); toast(`${nu.name} can now sign in with ${nu.phone} and their PIN`, 'ok'); setAddUser(false); setNu({ name: '', phone: '', pin: '', role: 'cashier' }); useStore.getState().bump(); } catch (e) { toast((e as Error).message, 'danger'); } finally { setBusy(false); }
+  };
+  const createStaff = async () => {
+    if (!ns.name.trim()) return toast('A name is needed', 'danger');
+    setBusy(true);
+    try { await api.addStaffMember(ns.name.trim(), ns.phone.trim() || undefined); toast(`${ns.name} added — credit bills and advances can now go to their account`, 'ok'); setAddStaff(false); setNs({ name: '', phone: '' }); useStore.getState().bump(); } catch (e) { toast((e as Error).message, 'danger'); } finally { setBusy(false); }
   };
   const toggleActive = async (p: api.Profile) => { try { await api.upsertProfile({ id: p.id, name: p.name, role: p.role, phone: p.phone ?? '', active: !p.active }); useStore.getState().bump(); } catch (e) { toast((e as Error).message, 'danger'); } };
   const toggleAccount = async (a: api.Account) => { try { const { supabase } = await import('../lib/supabase'); await supabase.from('accounts').update({ active: !a.active }).eq('id', a.id); useStore.getState().bump(); } catch (e) { toast((e as Error).message, 'danger'); } };
@@ -235,13 +242,14 @@ export function SettingsPage() {
       <TopBar title="Settings" sub="Owner only · users, accounts, rules, and the audit log" right={<Chips options={[{ value: 'users', label: 'Users' }, { value: 'accounts', label: 'Accounts & wallets' }, { value: 'distributors', label: 'Distributors' }, { value: 'days', label: 'Locked days' }, { value: 'audit', label: 'Audit log' }]} value={tab} onChange={setTab} />} />
       <div className="content">
         {tab === 'users' && <div className="grid grid-2 stack">
-          <Card title="Users & devices" right={<Button kind="primary" size="sm" onClick={() => setAddUser(true)}>+ Add user</Button>}>
-            <div className="scroll-x"><table className="table"><thead><tr><th>Name</th><th>Role</th><th>Phone</th><th>Devices</th><th></th></tr></thead><tbody>{profiles.map((p) => <tr key={p.id} style={{ opacity: p.active ? 1 : 0.5 }}><td><b>{p.name}</b></td><td><Pill kind={p.role === 'owner' ? 'accent' : p.role === 'manager' ? 'warn' : 'neutral'}>{p.role}</Pill></td><td className="num">{p.phone}</td><td className="muted">{devices.filter((d) => d.user_id === p.id).map((d) => `${d.label} · ${fmtDateTime(d.last_seen)}`).join(', ') || '—'}</td><td>{p.role !== 'owner' && <Button size="sm" onClick={() => toggleActive(p)}>{p.active ? 'Disable' : 'Enable'}</Button>}</td></tr>)}</tbody></table></div>
+          <Card title="Users & staff" right={<><Button size="sm" onClick={() => setAddStaff(true)} data-testid="add-staff">+ Staff (no login)</Button><Button kind="primary" size="sm" onClick={() => setAddUser(true)}>+ Add login</Button></>}>
+            <div className="scroll-x"><table className="table"><thead><tr><th>Name</th><th>Role</th><th>Phone</th><th>Devices</th><th></th></tr></thead><tbody>{profiles.map((p) => <tr key={p.id} style={{ opacity: p.active ? 1 : 0.5 }}><td><b>{p.name}</b></td><td><Pill kind={p.role === 'owner' ? 'accent' : p.role === 'manager' ? 'warn' : 'neutral'}>{p.role === 'staff' ? 'staff · no login' : p.role}</Pill></td><td className="num">{p.phone ?? '—'}</td><td className="muted">{p.has_login === false ? 'account only — cannot sign in' : devices.filter((d) => d.user_id === p.id).map((d) => `${d.label} · ${fmtDateTime(d.last_seen)}`).join(', ') || '—'}</td><td>{p.role !== 'owner' && <Button size="sm" onClick={() => toggleActive(p)}>{p.active ? 'Disable' : 'Enable'}</Button>}</td></tr>)}</tbody></table></div>
+            <div className="help">Staff without a login (helpers, salesmen) still get an account: their credit bills and advances are recorded against them, but they cannot open the app.</div>
             <div className="help">To reset someone's PIN: disable the user, add them again with a new PIN, or reset it from the Supabase dashboard (Authentication → Users).</div>
           </Card>
           <Card title="What each role can do">
             <div className="scroll-x"><table className="table"><thead><tr><th></th><th style={{ textAlign: 'center' }}>Cashier</th><th style={{ textAlign: 'center' }}>Manager</th><th style={{ textAlign: 'center' }}>Owner</th></tr></thead><tbody>
-              {[['Add purchases, payments, expenses, credit (with photo)', 'Yes', 'Yes', 'Yes'], ['Record daily sale and closing', 'No', 'Yes', 'Yes'], ['Mark invoice posted in POS', 'No', 'Yes', 'Yes'], ['Edit or delete any saved entry', 'No', 'No', 'With reason'], ['Approve & lock a day · staff advances · minus from receipts · Insights', 'No', 'No', 'Yes'], ['See own staff account · set reminders', 'Yes', 'Yes', 'Yes']].map((r) => <tr key={r[0]}><td>{r[0]}</td>{r.slice(1).map((c, i) => <td key={i} style={{ textAlign: 'center', fontWeight: 800 }} className={c === 'No' ? 'danger' : c === 'Yes' ? 'ok' : 'warn'}>{c}</td>)}</tr>)}
+              {[['Add purchases, payments, expenses, credit (with photo)', 'Yes', 'Yes', 'Yes'], ['Record daily sale and closing · staff medicine on credit', 'No', 'Yes', 'Yes'], ['Mark invoice posted in POS', 'No', 'Yes', 'Yes'], ['Edit or delete any saved entry', 'No', 'No', 'With reason'], ['Approve & lock a day · staff advances · minus from receipts · Insights', 'No', 'No', 'Yes'], ['See own staff account · set reminders', 'Yes', 'Yes', 'Yes']].map((r) => <tr key={r[0]}><td>{r[0]}</td>{r.slice(1).map((c, i) => <td key={i} style={{ textAlign: 'center', fontWeight: 800 }} className={c === 'No' ? 'danger' : c === 'Yes' ? 'ok' : 'warn'}>{c}</td>)}</tr>)}
             </tbody></table></div>
           </Card>
         </div>}
@@ -250,7 +258,13 @@ export function SettingsPage() {
         {tab === 'days' && <Card title="Days · last 60" right={<span className="help">approved days are locked</span>}>{days.map((d) => <div className="row" key={d.day}><div className="grow"><span className="t">{fmtDay(d.day)}</span><span className="s">opening {num(d.opening_cash)}{d.closed_at ? ` · closed by ${who(d.closed_by)}` : ''}{d.approved_at ? ` · approved by ${who(d.approved_by)} ${fmtDateTime(d.approved_at)}` : ''}</span></div>{d.status === 'approved' ? <Pill kind="ok"><Icon.Lock size={12} /> Locked</Pill> : d.status === 'closed' ? <Pill kind="warn">Awaiting approval</Pill> : <Pill kind="neutral">Open</Pill>}<Link className="btn sm" to={`/closing?day=${d.day}`}>Open</Link></div>)}</Card>}
         {tab === 'audit' && <Card title="Audit log · everything that happened" right={<span className="help">latest 200</span>}><div className="scroll-x"><table className="table"><thead><tr><th>When</th><th>Who</th><th>What</th><th>Reason</th><th>Device</th></tr></thead><tbody>{audit.map((a) => <tr key={a.id}><td className="num" style={{ whiteSpace: 'nowrap' }}>{fmtDateTime(a.at)}</td><td>{who(a.user_id)}</td><td><b className={a.action === 'blocked' ? 'danger' : a.action === 'update' || a.action === 'delete' || a.action === 'unlock' ? 'warn' : ''}>{a.action}</b> {a.table_name}{a.action === 'update' && a.before && a.after ? <span className="muted"> · {diffSummary(a.before as Record<string, unknown>, a.after as Record<string, unknown>)}</span> : a.action === 'blocked' ? <span className="muted"> · {(a.after as { invoice_no?: string; attempted?: number })?.invoice_no} attempted {num((a.after as { attempted?: number })?.attempted ?? 0)}</span> : a.action === 'insert' ? <span className="muted"> · {num(Number((a.after as { amount?: number })?.amount ?? (a.after as { pos_total?: number })?.pos_total ?? (a.after as { counted_cash?: number })?.counted_cash ?? 0))}</span> : ''}</td><td>{a.reason}</td><td className="muted">{a.device}</td></tr>)}</tbody></table></div></Card>}
       </div>
-      {addUser && <Sheet title="Add user" onClose={() => setAddUser(false)}>
+      {addStaff && <Sheet title="Add staff member (no login)" onClose={() => setAddStaff(false)}>
+        <Notice kind="info">For lower-level staff who don't use the app. Their medicine on credit and cash advances are tracked under Staff accounts.</Notice>
+        <Field label="Name"><input className="input" value={ns.name} onChange={(e) => setNs({ ...ns, name: e.target.value })} data-testid="staff-name" /></Field>
+        <Field label="Phone (optional)"><input className="input" inputMode="tel" value={ns.phone} onChange={(e) => setNs({ ...ns, phone: e.target.value })} /></Field>
+        <Button kind="primary" size="big" disabled={busy} onClick={createStaff} data-testid="staff-save">Add staff member</Button>
+      </Sheet>}
+      {addUser && <Sheet title="Add login" onClose={() => setAddUser(false)}>
         <Field label="Name"><input className="input" value={nu.name} onChange={(e) => setNu({ ...nu, name: e.target.value })} /></Field>
         <Field label="Phone number (their login)"><input className="input" inputMode="tel" value={nu.phone} onChange={(e) => setNu({ ...nu, phone: e.target.value })} placeholder="03001234567" /></Field>
         <Field label="PIN (6 digits)"><input className="input num" inputMode="numeric" maxLength={6} value={nu.pin} onChange={(e) => setNu({ ...nu, pin: e.target.value.replace(/\D/g, '') })} /></Field>

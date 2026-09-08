@@ -1,8 +1,8 @@
 import { supabase } from './supabase';
 
 // ---- types (mirror the database) --------------------------------------------
-export type Role = 'owner' | 'manager' | 'cashier';
-export type Profile = { id: string; name: string; role: Role; phone: string | null; active: boolean; created_at: string };
+export type Role = 'owner' | 'manager' | 'cashier' | 'staff';
+export type Profile = { id: string; name: string; role: Role; phone: string | null; active: boolean; has_login: boolean; created_at: string };
 export type AccountKind = 'cash_drawer' | 'card_machine' | 'wallet' | 'bank' | 'owner_personal' | 'waw_fs';
 export type Account = { id: string; name: string; kind: AccountKind; provider: string | null; active: boolean; sort_order: number };
 export type Distributor = { id: string; name: string; rep_name: string | null; phone: string | null; delivery_days: string | null; opening_balance: number; active: boolean };
@@ -11,20 +11,20 @@ export type Customer = { id: string; name: string; phone: string | null; note: s
 export type CustomerBalance = { id: string; name: string; phone: string | null; owed: number; since: string | null };
 export type ExpenseCategory = { id: string; name: string; active: boolean; sort_order: number };
 export type BusinessDay = { day: string; opening_cash: number; status: 'open' | 'closed' | 'approved'; closed_by: string | null; closed_at: string | null; approved_by: string | null; approved_at: string | null };
-export type DailySale = { id: string; day: string; pos_total: number; credit_total: number; photo_id: string; entered_by: string; device: string | null; created_at: string };
+export type DailySale = { id: string; day: string; pos_total: number; credit_total: number; photo_id: string; pos_source: 'pos' | 'count'; counted_cash: number | null; entered_by: string; device: string | null; created_at: string };
 export type DailySaleLine = { id: string; daily_sale_id: string; account_id: string; amount: number; photo_id: string };
 export type Invoice = { id: string; distributor_id: string; invoice_no: string; invoice_date: string | null; day: string; amount: number; photo_id: string; posted_in_pos: boolean; posted_at: string | null; posted_by: string | null; installments_planned: number | null; next_due: string | null; note: string | null; entered_by: string; device: string | null; created_at: string };
 export type InvoiceStatus = Invoice & { paid: number; remaining: number; payments_made: number; distributor_name: string };
 export type Payment = { id: string; invoice_id: string; day: string; amount: number; account_id: string; cash_source: 'today' | 'yesterday' | 'not_cash'; installment_no: number | null; photo_id: string; requested_by: string | null; entered_by: string; device: string | null; created_at: string };
 export type Expense = { id: string; day: string; category_id: string; amount: number; note: string | null; account_id: string; cash_source: string; photo_id: string; entered_by: string; device: string | null; created_at: string };
 export type StaffEntryKind = 'advance_sale_cash' | 'advance_purchase_cash' | 'medicine_credit' | 'salary_deduction' | 'cash_repayment';
-export type StaffEntry = { id: string; staff_id: string; day: string; kind: StaffEntryKind; amount: number; bill_no: string | null; note: string | null; photo_id: string; entered_by: string; created_at: string };
-export type StaffBalance = { id: string; name: string; role: Role; owed: number };
+export type StaffEntry = { id: string; staff_id: string; day: string; kind: StaffEntryKind; amount: number; bill_total: number | null; bill_no: string | null; note: string | null; photo_id: string; sale_id: string | null; entered_by: string; created_at: string };
+export type StaffBalance = { id: string; name: string; role: Role; has_login: boolean; active: boolean; owed: number };
 export type WawLoan = { id: string; day: string; kind: 'borrow' | 'repay'; amount: number; account_id: string; handled_by: string | null; note: string | null; photo_id: string; entered_by: string; created_at: string };
 export type OwnerPaid = { payment_id: string; day: string; amount: number; invoice_id: string; invoice_no: string; distributor_name: string; settled: number; unsettled: number; requested_by: string | null; photo_id: string };
 export type OwnerSettlement = { id: string; payment_id: string; day: string; kind: 'cash_return' | 'minus_receipts'; account_id: string | null; amount: number; photo_id: string; created_at: string };
 export type Closing = { id: string; day: string; expected_cash: number; counted_cash: number; difference: number; drawer_photo_id: string; note: string | null; closed_by: string; device: string | null; created_at: string };
-export type CreditBill = { id: string; customer_id: string; day: string; bill_no: string; amount: number; photo_id: string; entered_by: string; created_at: string };
+export type CreditBill = { id: string; customer_id: string; day: string; bill_no: string; amount: number; bill_total: number | null; photo_id: string; sale_id: string | null; entered_by: string; created_at: string };
 export type CreditCollection = { id: string; customer_id: string; bill_id: string | null; day: string; amount: number; account_id: string; photo_id: string; entered_by: string; created_at: string };
 export type Reminder = { id: string; invoice_id: string | null; title: string; amount: number | null; remind_at: string; notify_all: boolean; repeat_daily: boolean; created_by: string; done_at: string | null; last_fired_at: string | null; created_at: string };
 export type Notification = { id: string; user_id: string; kind: string; title: string; body: string | null; ref_table: string | null; ref_id: string | null; created_at: string; read_at: string | null };
@@ -74,6 +74,7 @@ export const addCustomer = async (c: Partial<Customer>) => must(await supabase.f
 export const listCategories = async () => must(await supabase.from('expense_categories').select('*').eq('active', true).order('sort_order')) as ExpenseCategory[];
 export const listProfiles = async () => must(await supabase.from('profiles').select('*').order('role').order('name')) as Profile[];
 export const upsertProfile = async (p: { id: string; name: string; role: Role; phone: string; active: boolean }) => must(await supabase.rpc('upsert_profile', { p_id: p.id, p_name: p.name, p_role: p.role, p_phone: p.phone, p_active: p.active })) as Profile;
+export const addStaffMember = async (name: string, phone?: string) => must(await supabase.rpc('add_staff_member', { p_name: name, p_phone: phone || null })) as Profile;
 export const listDevices = async () => must(await supabase.from('devices').select('*').order('last_seen', { ascending: false })) as { id: string; user_id: string; label: string; platform: string | null; last_seen: string }[];
 
 // ---- days, sale, closing ----------------------------------------------------
@@ -81,14 +82,20 @@ export const getDay = async (day: string) => (await supabase.from('business_days
 export const listDays = async (from: string, to: string) => must(await supabase.from('business_days').select('*').gte('day', from).lte('day', to).order('day', { ascending: false })) as BusinessDay[];
 export const setOpeningCash = async (day: string, amount: number) => must(await supabase.from('business_days').upsert({ day, opening_cash: amount }, { onConflict: 'day' }).select('*').single()) as BusinessDay;
 export const cashBook = async (day: string) => { const rows = must(await supabase.rpc('cash_book', { d: day })) as CashBook[]; const r = (Array.isArray(rows) ? rows[0] : rows) as CashBook; return Object.fromEntries(Object.entries(r).map(([k, v]) => [k, n(v)])) as CashBook; };
-export const getDailySale = async (day: string) => { const s = (await supabase.from('daily_sales').select('*').eq('day', day).maybeSingle()).data as DailySale | null; return s ? numify(s, ['pos_total', 'credit_total']) : null; };
+export const getDailySale = async (day: string) => { const s = (await supabase.from('daily_sales').select('*').eq('day', day).maybeSingle()).data as DailySale | null; return s ? { ...numify(s, ['pos_total', 'credit_total']), counted_cash: s.counted_cash === null ? null : n(s.counted_cash) } : null; };
 export const getSaleLines = async (saleId: string) => (must(await supabase.from('daily_sale_lines').select('*').eq('daily_sale_id', saleId)) as DailySaleLine[]).map((l) => numify(l, ['amount']));
-export async function saveDailySale(input: { day: string; pos_total: number; credit_total: number; photo_id: string; lines: { account_id: string; amount: number; photo_id: string }[] }) {
-  const sale = must(await supabase.from('daily_sales').insert({ day: input.day, pos_total: input.pos_total, credit_total: input.credit_total, photo_id: input.photo_id }).select('*').single()) as DailySale;
+export type SaleCreditLine = { who: 'customer' | 'staff'; id: string; bill_no: string; amount: number; bill_total: number | null; photo_id: string };
+export async function saveDailySale(input: { day: string; pos_total: number; credit_total: number; photo_id: string; pos_source?: 'pos' | 'count'; counted_cash?: number | null; lines: { account_id: string; amount: number; photo_id: string }[]; credits?: SaleCreditLine[] }) {
+  const sale = must(await supabase.from('daily_sales').insert({ day: input.day, pos_total: input.pos_total, credit_total: input.credit_total, photo_id: input.photo_id, pos_source: input.pos_source ?? 'pos', counted_cash: input.counted_cash ?? null }).select('*').single()) as DailySale;
   const lines = input.lines.filter((l) => l.amount > 0);
   if (lines.length) must(await supabase.from('daily_sale_lines').insert(lines.map((l) => ({ ...l, daily_sale_id: sale.id }))).select('id'));
+  for (const c of input.credits ?? []) {
+    if (c.who === 'customer') must(await supabase.from('customer_credit_bills').insert({ customer_id: c.id, day: input.day, bill_no: c.bill_no, amount: c.amount, bill_total: c.bill_total, photo_id: c.photo_id, sale_id: sale.id }).select('id'));
+    else must(await supabase.from('staff_entries').insert({ staff_id: c.id, day: input.day, kind: 'medicine_credit', amount: c.amount, bill_total: c.bill_total, bill_no: c.bill_no, photo_id: c.photo_id, sale_id: sale.id }).select('id'));
+  }
   return sale;
 }
+export const cashBeforeSale = async (day: string) => n(must(await supabase.rpc('cash_before_sale', { d: day })));
 export const getClosing = async (day: string) => { const c = (await supabase.from('closings').select('*').eq('day', day).maybeSingle()).data as Closing | null; return c ? numify(c, ['expected_cash', 'counted_cash', 'difference']) : null; };
 export const submitClosing = async (day: string, counted: number, photoId: string, note?: string) => numify(must(await supabase.rpc('submit_closing', { p_day: day, p_counted: counted, p_drawer_photo: photoId, p_note: note ?? null })) as Closing, ['expected_cash', 'counted_cash', 'difference']);
 export const approveDay = async (day: string) => must(await supabase.rpc('approve_day', { p_day: day }));
@@ -133,6 +140,7 @@ export const addCreditCollection = async (c: { customer_id: string; bill_id?: st
 
 // ---- staff ------------------------------------------------------------------
 export const staffBalances = async () => (must(await supabase.from('v_staff_balance').select('*').order('name')) as StaffBalance[]).map((s) => numify(s, ['owed']));
+export const listStaffEntriesForSale = async (saleId: string) => (must(await supabase.from('staff_entries').select('*').eq('sale_id', saleId)) as StaffEntry[]).map((e) => numify(e, ['amount']));
 export const listStaffEntries = async (staffId: string) => (must(await supabase.from('staff_entries').select('*').eq('staff_id', staffId).order('day', { ascending: false }).order('created_at', { ascending: false })) as StaffEntry[]).map((e) => numify(e, ['amount']));
 export const addStaffEntry = async (e: { staff_id: string; day: string; kind: StaffEntryKind; amount: number; bill_no?: string | null; note?: string | null; photo_id: string }) => must(await supabase.from('staff_entries').insert(e).select('*').single()) as StaffEntry;
 

@@ -95,7 +95,17 @@ test('manager records the daily sale with slips and screenshots, cash part is wo
   await line('Alfalah card machine', '1200', 3);
   await line('EasyPaisa', '2500', 4);
   await line('JazzCash', '1500', 5);
-  await page.fill('#credit-total', '2500');
+  // credit: 2,500 of Rashid Ali's 4,000 bill goes on credit, with the bill photo
+  await page.getByTestId('add-credit').click();
+  await selectByText(page, '[data-testid="credit-who"]', 'Rashid Ali');
+  await page.getByTestId('credit-bill-no').fill('4470');
+  await page.fill('#credit-bill-total', '4000');
+  await page.getByRole('radio', { name: 'Part of it' }).click();
+  await page.fill('#credit-amount', '2500');
+  await attachPhoto(page, 6);
+  await page.getByTestId('credit-add').click();
+  await expect(page.getByTestId('credit-total')).toHaveText('2,500');
+  await expect(page.locator('.content')).toContainText('1,500 paid now');
   await expect(page.getByTestId('cash-part')).toHaveText('91,350');
   await expect(page.locator('.notice.ok')).toContainText('matches POS');
   await page.getByTestId('save-sale').click();
@@ -120,7 +130,7 @@ test('manager closes the day: expected cash computed, minus turns red, closing i
   await attachPhoto(page);
   await page.locator('.sheet button:has-text("Save")').click();
   await toastSeen(page, 'Collection saved');
-  await expect(page.locator('.content')).toContainText('owes 600');
+  await expect(page.locator('.content')).toContainText('owes 3,100'); // 2,500 from the sale + 1,800 − 1,200
 
   await page.goto('/closing');
   // 52,800 + 91,350 + 1,200 − 27,400 − 4,250 = 1,13,700
@@ -276,7 +286,16 @@ test('owner corrects an expense with a reason; staff advance; WAW loan; reminder
 test('owner creates a new cashier login and the new user can sign in', async ({ page }) => {
   await signIn(page, 'owner');
   await page.goto('/settings');
-  await page.getByRole('button', { name: '+ Add user' }).click();
+  // a helper without a login gets an account
+  await page.getByTestId('add-staff').click();
+  await page.getByTestId('staff-name').fill('Salman Helper');
+  await page.getByTestId('staff-save').click();
+  await toastSeen(page, 'Salman Helper added');
+  await expect(page.locator('table').first()).toContainText('staff · no login');
+  await page.goto('/staff');
+  await expect(page.locator('.content')).toContainText('Salman Helper');
+  await page.goto('/settings');
+  await page.getByRole('button', { name: '+ Add login' }).click();
   await page.locator('.sheet input').nth(0).fill('Kashif Mehmood');
   await page.locator('.sheet input').nth(1).fill('03004567890');
   await page.locator('.sheet input').nth(2).fill('445566');
@@ -289,4 +308,29 @@ test('owner creates a new cashier login and the new user can sign in', async ({ 
   await page.click('button:has-text("Sign in")');
   await page.waitForURL(/\/$/);
   await expect(page.locator('.sidebar')).toContainText('Cashier · Kashif');
+});
+
+test('count-first: manager counts the drawer and the app works the sale out, closing is prefilled', async ({ page }) => {
+  await signOut(page);
+  await signIn(page, 'manager');
+  const d = new Date(); d.setDate(d.getDate() - 3); const day = d.toISOString().slice(0, 10);
+  await page.goto(`/sales/new?day=${day}`);
+  await page.getByRole('radio', { name: /Count the drawer/ }).click();
+  await page.fill('#counted-now', '30000');
+  await attachPhoto(page, 0);
+  await expect(page.getByTestId('cash-from-count')).toHaveText('30,000');
+  const input = page.locator('label:has-text("HBL card machine") + .amount-wrap input');
+  await input.fill('2000');
+  await attachPhoto(page, 1);
+  await expect(page.locator('.notice.ok')).toContainText('32,000');
+  await page.getByTestId('save-sale').click();
+  await toastSeen(page, 'Daily sale saved');
+  await expect(page).toHaveURL(/\/closing/);
+  await expect(page.locator('.content')).toContainText('worked out from the drawer count');
+  await expect(page.getByTestId('expected-cash')).toHaveText('30,000');
+  await expect(page.locator('#counted')).toHaveValue('30000');
+  await attachPhoto(page, 0);
+  await page.getByTestId('submit-closing').click();
+  await toastSeen(page, 'Closing submitted');
+  await expect(page.getByTestId('difference')).toContainText('0');
 });

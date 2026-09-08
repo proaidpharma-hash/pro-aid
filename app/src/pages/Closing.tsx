@@ -16,7 +16,7 @@ export default function Closing() {
   const [params] = useSearchParams();
   const day = params.get('day') || today();
   const [data, setData] = useState<{ sale: api.DailySale | null; lines: api.DailySaleLine[]; book: api.CashBook; closing: api.Closing | null; bday: api.BusinessDay | null; photos: api.Photo[]; recent: api.Closing[]; closedBy: string } | null>(null);
-  const [counted, setCounted] = useState('');
+  const [counted, setCounted] = useState(params.get('counted') ?? '');
   const [photo, setPhoto] = useState<ProofPhoto | null>(null);
   const [note, setNote] = useState('');
   const [busy, setBusy] = useState(false);
@@ -30,6 +30,7 @@ export default function Closing() {
     const recent = await api.listClosings(from.toISOString().slice(0, 10), day);
     const photos = await api.getPhotos([...(closing ? [closing.drawer_photo_id] : []), ...(sale ? [sale.photo_id] : [])]);
     setData({ sale, lines, book, closing, bday, photos, recent, closedBy: closing ? profiles.find((p) => p.id === closing.closed_by)?.name ?? '' : '' });
+    if (sale?.pos_source === 'count' && sale.counted_cash !== null && !closing) setCounted((c) => c || String(Math.round(sale.counted_cash!)));
   };
   useEffect(() => { load().catch((e) => toast((e as Error).message, 'danger')); }, [day, refreshKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -62,12 +63,13 @@ export default function Closing() {
           {!sale && <Card kind="warn"><b>Step 1 · Record the daily sale first</b><span className="help">The closing needs the POS total and its split.</span>{profile.role !== 'cashier' && <Link className="btn primary" to={`/sales/new?day=${day}`} style={{ alignSelf: 'flex-start' }}>Record daily sale</Link>}</Card>}
           {sale && <Card title={<span><span className="pill ok"><Icon.Check size={12} /></span> POS system total</span>} right={<ProofLink storagePath={photoPath(sale.photo_id)} label="POS photo" />}>
             <div className="grid grid-4">
-              <div className="kpi"><div className="label">Total</div><div className="value num" style={{ fontSize: 20 }}>{num(sale.pos_total)}</div></div>
+              <div className="kpi"><div className="label">{sale.pos_source === 'count' ? 'Sale (from count)' : 'Total'}</div><div className="value num" style={{ fontSize: 20 }}>{num(sale.pos_total)}</div></div>
               <div className="kpi"><div className="label accent">Cash</div><div className="value num accent" style={{ fontSize: 20 }}>{num(book.pos_cash_sale)}</div></div>
               <div className="kpi"><div className="label">Card / online</div><div className="value num" style={{ fontSize: 20 }}>{num(nonCash)}</div></div>
               <div className="kpi"><div className="label warn">Credit</div><div className="value num warn" style={{ fontSize: 20 }}>{num(sale.credit_total)}</div></div>
             </div>
           </Card>}
+          {sale?.pos_source === 'count' && <Notice kind="warn">The sale was worked out from the drawer count ({num(sale.counted_cash)}), so the difference below will be zero. The owner should compare {num(sale.pos_total)} with the POS report.</Notice>}
           <Card title={<span><span className="pill ok"><Icon.Check size={12} /></span> Cash in and out today</span>} right={<span className="help">from entries</span>}>
             <div className="line"><span className="k">Opening cash (yesterday)</span><span className="v num">{num(book.opening_cash)}</span></div>
             <div className="line"><span className="k">+ POS cash sale (cash only)</span><span className="v num ok">+ {num(book.pos_cash_sale)}</span></div>

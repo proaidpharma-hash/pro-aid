@@ -237,7 +237,8 @@ select t_ok((select owed from v_staff_balance where id = :cashier::uuid) = 4350,
 select t_as(:cashier);
 select t_ok((select count(*) from staff_entries) = 3, 'cashier can see own staff entries');
 select t_as(:manager);
-select t_ok((select count(*) from staff_entries) = 0, 'manager cannot see another staff member''s entries');
+select t_ok((select count(*) from staff_entries where kind <> 'medicine_credit') = 0, 'manager cannot see another staff member''s advances');
+select t_ok((select count(*) from staff_entries where kind = 'medicine_credit') = 1, 'manager can see medicine-on-credit entries (they record them in the sale)');
 
 -- WAW
 select t_as(:cashier, 'Own Android');
@@ -311,3 +312,36 @@ select t_ok((range_summary('2026-09-01','2026-09-30')->>'expenses')::numeric = 1
 select t_ok((range_summary('2026-09-01','2026-09-30')->>'owed_to_waw')::numeric = 35000, 'range summary shows WAW owed');
 reset role;
 select 'ALL RULE TESTS PASSED (incl. api)' as result;
+
+-- ---------------------------------------------------------------------------
+-- 9. staff without login · credit lines in the sale · count-first
+-- ---------------------------------------------------------------------------
+set role app_user;
+select t_as(:manager);
+select t_expect_error($q$ select add_staff_member('Salman (helper)') $q$, '42501', 'manager cannot add a staff member');
+select t_as(:owner);
+select t_expect_error($q$ select add_staff_member('   ') $q$, 'PA030', 'staff member needs a name');
+select t_ok((select role::text = 'staff' and has_login = false and phone is null from add_staff_member('Salman (helper)', '')), 'owner adds a staff member with no login');
+select t_ok((select count(*) from v_staff_balance where name = 'Salman (helper)') = 1, 'staff member without login appears in the staff ledger');
+select t_ok((select count(*) from v_staff_balance where role::text = 'owner') = 0, 'owner is not listed as staff');
+-- notify_everyone skips accounts that cannot sign in
+select notify_everyone('payment_reminder', 't', 'b', null, null);
+select t_ok((select count(*) from notifications where title = 't' and user_id = (select id from profiles where name = 'Salman (helper)')) = 0, 'no notifications for accounts without a login');
+-- the manager records medicine on credit for the staff member as part of the sale
+select t_as(:manager);
+insert into daily_sales(day, pos_total, credit_total, photo_id) values ('2026-09-10', 50000, 4000, t_photo(:manager));
+insert into staff_entries(staff_id, day, kind, amount, bill_total, bill_no, photo_id, sale_id)
+  values ((select id from profiles where name = 'Salman (helper)'), '2026-09-10', 'medicine_credit', 1500, 2100, 'S-1', t_photo(:manager), (select id from daily_sales where day = '2026-09-10'));
+select t_expect_error($q$ insert into staff_entries(staff_id, day, kind, amount, photo_id)
+  values ((select id from profiles where name = 'Salman (helper)'), '2026-09-10', 'advance_sale_cash', 500, t_photo('00000000-0000-0000-0000-000000000002')) $q$, '42501', 'manager still cannot give a cash advance');
+insert into customer_credit_bills(customer_id, day, bill_no, amount, bill_total, photo_id, sale_id)
+  values ((select id from customers where name = 'Rashid Ali'), '2026-09-10', 'C-77', 2500, 6000, t_photo(:manager), (select id from daily_sales where day = '2026-09-10'));
+select t_expect_error($q$ insert into customer_credit_bills(customer_id, day, bill_no, amount, bill_total, photo_id)
+  values ((select id from customers where name = 'Rashid Ali'), '2026-09-10', 'C-78', 2500, 2000, t_photo('00000000-0000-0000-0000-000000000002')) $q$, '23514', 'credit part cannot exceed the bill total');
+select t_ok(sale_credit_entered((select id from daily_sales where day = '2026-09-10')) = 4000, 'credit lines add up to the sale credit total');
+select t_ok((select owed from v_staff_balance where name = 'Salman (helper)') = 1500, 'staff member owes the medicine credit');
+-- count-first: cash before the sale is opening ± the day''s cash movements
+select t_ok(cash_before_sale('2026-09-07') = 52800 + 0 - 27400 + 0 - (select coalesce(sum(amount),0) from expenses where day='2026-09-07' and account_id = cash_drawer_id()) - (select coalesce(sum(amount),0) from staff_entries where day='2026-09-07' and kind in ('advance_sale_cash','advance_purchase_cash')) + (select coalesce(sum(amount),0) from waw_loans where day='2026-09-07' and kind='borrow' and account_id=cash_drawer_id()) - (select coalesce(sum(amount),0) from waw_loans where day='2026-09-07' and kind='repay' and account_id=cash_drawer_id()) - (select coalesce(sum(amount),0) from owner_settlements where day='2026-09-07' and kind='cash_return') + (select coalesce(sum(amount),0) from customer_credit_collections where day='2026-09-07' and account_id=cash_drawer_id()), 'cash before the sale matches the cash book');
+select t_ok((select expected_cash from cash_book('2026-09-07')) = cash_before_sale('2026-09-07') + (select pos_cash_sale from cash_book('2026-09-07')), 'expected cash = cash before sale + cash sale');
+reset role;
+select 'ALL RULE TESTS PASSED (incl. staff & sale credit)' as result;

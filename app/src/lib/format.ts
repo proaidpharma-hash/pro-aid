@@ -20,7 +20,10 @@ export function rs(n: number | string | null | undefined, opts: { sign?: boolean
 }
 export const num = (n: number | string | null | undefined, sign = false) => rs(n, { prefix: false, sign });
 
-export const today = () => format(new Date(), 'yyyy-MM-dd');
+// The shop runs 8 am to 1 am, so anything entered before 4 am still belongs to the previous business day.
+export const DAY_CUTOFF_HOUR = 4;
+export const businessDay = (now: Date) => { const d = new Date(now); if (d.getHours() < DAY_CUTOFF_HOUR) d.setDate(d.getDate() - 1); return format(d, 'yyyy-MM-dd'); };
+export const today = () => businessDay(new Date());
 export const fmtDay = (d: string | Date, f = 'EEE d MMM yyyy') => format(typeof d === 'string' ? parseISO(d) : d, f);
 export const fmtShort = (d: string | Date) => fmtDay(d, 'd MMM');
 export const fmtTime = (d: string | Date) => format(typeof d === 'string' ? parseISO(d) : d, 'h:mm a');

@@ -456,3 +456,83 @@ select t_ok((select expected_cash from cash_book('2026-09-13')) = (select openin
 select t_expect_error($q$ select set_invoice_due((select id from invoices where invoice_no='77002'), '2026-09-21') $q$, 'PA062', 'no due date on a fully paid invoice');
 reset role;
 select 'ALL RULE TESTS PASSED (incl. multi-source payments)' as result;
+
+-- ---------------------------------------------------------------------------
+-- 14. control pack: viewer role, device alerts, duplicate photo, budgets, surprise count,
+--     card reconciliation, scorecard, digest, anomalies, telegram settings
+-- ---------------------------------------------------------------------------
+-- viewer
+insert into auth.users(id, phone) values ('00000000-0000-0000-0000-000000000009', '03000000009');
+set role app_user;
+select t_as(:owner);
+select t_ok((select role::text from upsert_profile('00000000-0000-0000-0000-000000000009', 'Partner', 'viewer'::text::app_role, '03000000009')) = 'viewer', 'owner creates a read-only viewer');
+select t_as('00000000-0000-0000-0000-000000000009');
+select t_ok((select count(*) from invoices) > 0 and (select count(*) from closings) > 0 and (select count(*) from audit_log) > 0 and (select count(*) from staff_entries) > 0, 'viewer reads invoices, closings, audit log and staff entries');
+select t_ok((select count(*) from range_summary('2026-09-01','2026-09-30')) = 1, 'viewer can read reports');
+select t_expect_error($q$ insert into expenses(day, category_id, amount, account_id, cash_source, photo_id) values ('2026-09-14', (select id from expense_categories limit 1), 10, cash_drawer_id(), 'today', t_photo('00000000-0000-0000-0000-000000000009')) $q$, '42501', 'viewer cannot add an expense');
+select t_expect_error($q$ select give_unposted_reason((select id from invoices limit 1), '2026-09-14', 'x') $q$, '42501', 'viewer cannot call writing functions');
+select t_expect_error($q$ select record_payment((select id from invoices where invoice_no='77003'), '2026-09-14', 100, cash_drawer_id(), 'today', t_photo('00000000-0000-0000-0000-000000000009')) $q$, '42501', 'viewer cannot pay');
+select t_expect_error($q$ select reset_login_pin('00000000-0000-0000-0000-000000000002', 'abcdefghijklmnopqrstuvwxyz0123456789') $q$, '42501', 'viewer cannot reset PINs');
+-- new device alert
+select t_as(:cashier);
+select touch_device('Ahmed new phone', 'Android');
+select touch_device('Ahmed new phone', 'Android');
+select t_as(:owner);
+select t_ok((select count(*) from notifications where user_id = :owner::uuid and title = 'New device signed in · Ahmed') = 1, 'owner alerted once about a new device');
+select t_ok((select count(*) from audit_log where action = 'login' and device = 'Ahmed new phone') = 1, 'new device sign-in is in the audit log');
+-- duplicate photo
+select t_expect_error($q$ insert into photos(storage_path, taken_by, device, sha256) values ('dup/1', '00000000-0000-0000-0000-000000000001', 't', 'abc123'), ('dup/2', '00000000-0000-0000-0000-000000000001', 't', 'abc123') $q$, '23505', 'the same picture cannot be uploaded twice');
+-- budgets
+select set_expense_budget((select id from expense_categories order by sort_order limit 1), 3000);
+select t_as(:cashier);
+insert into expenses(day, category_id, amount, note, account_id, cash_source, photo_id) values ('2026-09-14', (select id from expense_categories order by sort_order limit 1), 2500, 'a', cash_drawer_id(), 'today', t_photo(:cashier));
+insert into expenses(day, category_id, amount, note, account_id, cash_source, photo_id) values ('2026-09-14', (select id from expense_categories order by sort_order limit 1), 800, 'b', cash_drawer_id(), 'today', t_photo(:cashier));
+insert into expenses(day, category_id, amount, note, account_id, cash_source, photo_id) values ('2026-09-15', (select id from expense_categories order by sort_order limit 1), 100, 'c', cash_drawer_id(), 'today', t_photo(:cashier));
+select t_as(:owner);
+select t_ok((select over from expense_budget_status('2026-09-01') where budget = 3000) and (select spent from expense_budget_status('2026-09-01') where budget = 3000) >= 3400, 'budget status shows the category over budget');
+select t_ok((select count(*) from notifications where user_id = :owner::uuid and title like 'Budget exceeded%') = 1, 'budget alert fires once for the month');
+-- surprise count on a day whose sale is not yet recorded
+select t_as(:manager);
+select t_expect_error($q$ select spot_count('2026-09-07', 50000, t_photo('00000000-0000-0000-0000-000000000002'), 1000, '{"1000": 1}', t_photo('00000000-0000-0000-0000-000000000002')) $q$, 'PA070', 'no surprise count once the sale is recorded');
+insert into sale_receipts(day, account_id, amount, photo_id) values ('2026-09-16', (select id from accounts where name='HBL card machine'), 4000, t_photo(:manager));
+select t_ok(expected_cash_now('2026-09-16', 30000) = cash_before_sale('2026-09-16') + 30000 - 4000, 'expected cash now = cash before sale + POS so far − receipts − credit');
+select t_ok((select difference from spot_count('2026-09-16', 30000, t_photo(:manager), cash_before_sale('2026-09-16') + 26000 - 500, null, t_photo(:manager), 'random check 3 pm')) = -500, 'surprise count records a 500 minus');
+select t_as(:owner);
+select t_ok((select count(*) from notifications where user_id = :owner::uuid and title like 'MINUS at surprise count%') = 1, 'owner alerted about the surprise-count minus');
+select t_as(:cashier);
+select t_expect_error($q$ select spot_count('2026-09-16', 30000, t_photo('00000000-0000-0000-0000-000000000003'), 1000, null, t_photo('00000000-0000-0000-0000-000000000003')) $q$, '42501', 'cashier cannot do a surprise count');
+-- card reconciliation
+select t_as(:manager);
+select t_expect_error($q$ insert into bank_settlements(account_id, day, amount, photo_id) values ((select id from accounts where name='EasyPaisa'), '2026-09-16', 1, t_photo('00000000-0000-0000-0000-000000000002')) $q$, 'PA071', 'settlements are for card machines only');
+insert into bank_settlements(account_id, day, amount, note, photo_id) values ((select id from accounts where name='HBL card machine'), '2026-09-16', 3900, 'bank statement 17 Sep', t_photo(:manager));
+select t_ok((select difference from card_reconciliation('2026-09-16','2026-09-16') where account_name='HBL card machine') = -100, 'reconciliation shows the bank paid 100 less than the machine took');
+select t_as(:owner);
+select t_ok((select count(*) from notifications where user_id = :owner::uuid and title like 'Card settlement short · HBL%') = 1, 'owner alerted about the short settlement');
+-- scorecard
+select t_ok((select days_closed from staff_scorecard('2026-09-01','2026-09-30') where name='Bilal') >= 1 and (select minus_days from staff_scorecard('2026-09-01','2026-09-30') where name='Bilal') >= 0, 'scorecard counts closings per person');
+select t_ok((select blocked_attempts from staff_scorecard('2026-09-01','2026-09-30') where name='Ahmed') >= 1, 'scorecard counts blocked duplicate attempts');
+-- digest and anomalies
+-- a closing that matches to the rupee on 2026-09-16
+select t_as(:manager);
+insert into daily_sales(day, pos_total, credit_total, photo_id) values ('2026-09-16', 30000, 0, t_photo(:manager));
+select give_unposted_reason(b.id, '2026-09-16', 'stock check pending') from closing_blockers('2026-09-16') b;
+select submit_closing('2026-09-16', (select expected_cash from cash_book('2026-09-16')), t_photo(:manager));
+select t_as(:owner);
+select t_ok(run_anomaly_checks('2026-09-16') >= 1, 'anomaly checks run');
+select t_ok((select count(*) from notifications where user_id = :owner::uuid and ref_table = 'anomaly' and title like 'Anomaly · exactly zero difference · 2026-09-16%') = 1, 'zero-difference closing flagged');
+select run_anomaly_checks('2026-09-16');
+select t_ok((select count(*) from notifications where user_id = :owner::uuid and ref_table = 'anomaly' and title like 'Anomaly · exactly zero difference · 2026-09-16%') = 1, 'the same anomaly is not repeated');
+select t_ok((select count(*) from notifications where user_id = :owner::uuid and ref_table = 'anomaly' and title like 'Anomaly · %paid % more than once%') >= 0, 'same-amount rule runs without error');
+select t_ok(daily_digest('2026-09-16') like 'Pro Aid · Wed 16 Sep%' and daily_digest('2026-09-16') like '%Sale 30000%' and daily_digest('2026-09-16') like '%Closing: expected%plus 0%', 'digest summarises the day');
+select t_ok(daily_digest('2026-09-30') like '%Closing: NOT DONE%', 'digest says when a day is not closed');
+-- telegram settings: owner only, unknown keys refused, sending is a no-op without pg_net / config
+select t_expect_error($q$ select set_setting('evil', 'x') $q$, 'PA072', 'unknown settings are refused');
+select set_setting('telegram_bot_token', '123:abc');
+select t_ok(send_telegram('hello') = false, 'no chat id → nothing sent');
+select set_setting('telegram_chat_id', '999');
+select t_ok(send_telegram('hello') = false, 'without pg_net nothing is sent (and nothing breaks)');
+select t_as(:manager);
+select t_expect_error($q$ select set_setting('telegram_chat_id', '1') $q$, '42501', 'manager cannot change settings');
+select t_ok((select count(*) from app_settings) = 0, 'manager cannot read settings');
+reset role;
+select 'ALL RULE TESTS PASSED (incl. control pack)' as result;

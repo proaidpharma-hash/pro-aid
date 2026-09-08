@@ -1,0 +1,313 @@
+-- Rule tests for the Pro Aid database. Run with: psql ... -v ON_ERROR_STOP=1 -f tests/01_rules.sql
+-- Each block asserts one rule the owner asked for. A failing assertion raises and stops the run.
+\set ON_ERROR_STOP on
+\set QUIET on
+
+create or replace function t_expect_error(sql text, want_code text, label text) returns void language plpgsql as $$
+begin
+  begin
+    execute sql;
+  exception when others then
+    if sqlstate = want_code then
+      raise notice 'PASS  % (blocked with %: %)', label, sqlstate, sqlerrm;
+      return;
+    else
+      raise exception 'FAIL  %: expected % but got % (%)', label, want_code, sqlstate, sqlerrm;
+    end if;
+  end;
+  raise exception 'FAIL  %: expected error % but it succeeded', label, want_code;
+end $$;
+
+create or replace function t_ok(cond boolean, label text) returns void language plpgsql as $$
+begin
+  if cond then raise notice 'PASS  %', label; else raise exception 'FAIL  %', label; end if;
+end $$;
+
+-- RLS hides rows from staff, so their UPDATE/DELETE touches nothing (no error, zero rows)
+create or replace function t_no_rows(sql text, label text) returns void language plpgsql as $$
+declare n int;
+begin
+  execute 'with r as (' || sql || ' returning 1) select count(*) from r' into n;
+  if n = 0 then raise notice 'PASS  % (0 rows affected)', label; else raise exception 'FAIL  %: % rows affected', label, n; end if;
+end $$;
+
+create or replace function t_as(uid uuid, dev text default 'test device') returns void language sql as $$
+  select set_config('app.uid', uid::text, false), set_config('app.device', dev, false), set_config('app.reason', '', false)
+$$;
+
+-- fresh photo helper: every entry needs its own proof
+create or replace function t_photo(uid uuid) returns uuid language plpgsql as $$
+declare pid uuid;
+begin
+  insert into photos(storage_path, taken_by, device) values ('test/' || gen_random_uuid(), uid, 'test') returning id into pid;
+  return pid;
+end $$;
+
+-- ---------------------------------------------------------------------------
+-- users
+-- ---------------------------------------------------------------------------
+insert into auth.users(id, phone) values
+  ('00000000-0000-0000-0000-000000000001', '03000000001'),
+  ('00000000-0000-0000-0000-000000000002', '03000000002'),
+  ('00000000-0000-0000-0000-000000000003', '03000000003');
+insert into profiles(id, name, role, phone) values
+  ('00000000-0000-0000-0000-000000000001', 'Ayan', 'owner', '03000000001'),
+  ('00000000-0000-0000-0000-000000000002', 'Bilal', 'manager', '03000000002'),
+  ('00000000-0000-0000-0000-000000000003', 'Ahmed', 'cashier', '03000000003');
+
+\set owner '''00000000-0000-0000-0000-000000000001'''
+\set manager '''00000000-0000-0000-0000-000000000002'''
+\set cashier '''00000000-0000-0000-0000-000000000003'''
+
+-- run the rest as a non-superuser so RLS applies
+create role app_user login;
+grant usage on schema public, auth to app_user;
+grant select, insert, update, delete on all tables in schema public to app_user;
+grant usage, select on all sequences in schema public to app_user;
+grant execute on all functions in schema public to app_user;
+grant execute on all functions in schema auth to app_user;
+set role app_user;
+
+-- ---------------------------------------------------------------------------
+-- reference rows (owner)
+-- ---------------------------------------------------------------------------
+select t_as(:owner, 'Windows laptop');
+insert into distributors(name) values ('Getz Pharma'), ('Muller & Phipps');
+insert into customers(name, phone) values ('Rashid Ali', '03012223344');
+
+-- ---------------------------------------------------------------------------
+-- 1. photo is mandatory, and one photo proves one entry only
+-- ---------------------------------------------------------------------------
+select t_as(:cashier, 'Own Android');
+select t_expect_error(
+  $q$ insert into invoices(distributor_id, invoice_no, day, amount, photo_id)
+      values ((select id from distributors where name='Getz Pharma'), '55120', '2026-09-01', 53800, null) $q$,
+  '23502', 'invoice without photo is rejected');
+
+select set_config('t.photo1', t_photo(:cashier)::text, false);
+insert into invoices(distributor_id, invoice_no, day, amount, photo_id)
+  values ((select id from distributors where name='Getz Pharma'), '55120', '2026-09-01', 53800, current_setting('t.photo1')::uuid);
+select t_ok((select used_by_table from photos where id = current_setting('t.photo1')::uuid) = 'invoices', 'photo is claimed by the invoice');
+
+select t_expect_error(
+  $q$ insert into invoices(distributor_id, invoice_no, day, amount, photo_id)
+      values ((select id from distributors where name='Muller & Phipps'), '88213', '2026-09-01', 22400, current_setting('t.photo1')::uuid) $q$,
+  '23505', 'reusing a photo for a second entry is rejected');
+
+-- ---------------------------------------------------------------------------
+-- 2. entries are stamped with who and which device; staff cannot edit or delete
+-- ---------------------------------------------------------------------------
+select t_ok((select entered_by = :cashier::uuid and device = 'Own Android' from invoices where invoice_no='55120'), 'invoice stamped with cashier and device');
+select t_no_rows($q$ update invoices set amount = 1 where invoice_no='55120' $q$, 'cashier cannot edit an entry');
+select t_no_rows($q$ delete from invoices where invoice_no='55120' $q$, 'cashier cannot delete an entry');
+select t_ok((select amount from invoices where invoice_no='55120') = 53800, 'invoice unchanged after staff attempts');
+select t_as(:manager, 'Pharmacy Android');
+select t_no_rows($q$ update invoices set amount = 1 where invoice_no='55120' $q$, 'manager cannot edit an entry');
+
+-- owner must give a reason; both versions land in the audit log
+select t_as(:owner, 'Windows laptop');
+select t_expect_error($q$ update invoices set note = 'x' where invoice_no='55120' $q$, 'PA002', 'owner edit without reason is rejected');
+begin;
+select set_config('app.reason', 'wrong note', true);
+update invoices set note = 'corrected' where invoice_no='55120';
+commit;
+select t_ok((select count(*) from audit_log where table_name='invoices' and action='update' and reason='wrong note' and before is not null and after is not null) = 1, 'owner edit logged with before, after and reason');
+
+-- ---------------------------------------------------------------------------
+-- 3. duplicate invoice number, payments never exceed, installments numbered, duplicate payment blocked + owner notified
+-- ---------------------------------------------------------------------------
+select t_as(:cashier, 'Own Android');
+select t_expect_error(
+  $q$ insert into invoices(distributor_id, invoice_no, day, amount, photo_id)
+      values ((select id from distributors where name='Getz Pharma'), '55120', '2026-09-02', 100, t_photo('00000000-0000-0000-0000-000000000003')) $q$,
+  '23505', 'same distributor + invoice number twice is rejected');
+
+insert into payments(invoice_id, day, amount, account_id, cash_source, photo_id)
+  values ((select id from invoices where invoice_no='55120'), '2026-09-07', 27400, (select id from accounts where kind='cash_drawer'), 'yesterday', t_photo(:cashier));
+select t_ok((select installment_no from payments where amount=27400) = 1, 'first payment is installment 1');
+select t_ok((select remaining from v_invoice_status where invoice_no='55120') = 26400, 'remaining is 26,400 after 27,400');
+
+select t_expect_error(
+  $q$ insert into payments(invoice_id, day, amount, account_id, photo_id)
+      values ((select id from invoices where invoice_no='55120'), '2026-09-07', 30000, (select id from accounts where kind='cash_drawer'), t_photo('00000000-0000-0000-0000-000000000003')) $q$,
+  'PA007', 'paying more than remaining is rejected');
+
+select t_ok(payment_warning((select id from invoices where invoice_no='55120'), 27400, '2026-09-07') is not null, 'same amount same distributor same day raises a warning');
+
+insert into payments(invoice_id, day, amount, account_id, photo_id)
+  values ((select id from invoices where invoice_no='55120'), '2026-09-08', 26400, (select id from accounts where name='UBL account'), t_photo(:cashier));
+select t_ok((select installment_no from payments where amount=26400) = 2, 'second payment is installment 2');
+select t_ok((select remaining from v_invoice_status where invoice_no='55120') = 0, 'invoice fully paid');
+
+select t_expect_error(
+  $q$ insert into payments(invoice_id, day, amount, account_id, photo_id)
+      values ((select id from invoices where invoice_no='55120'), '2026-09-08', 100, (select id from accounts where kind='cash_drawer'), t_photo('00000000-0000-0000-0000-000000000003')) $q$,
+  'PA006', 'paying a fully paid invoice again is blocked (direct insert)');
+select t_ok((record_payment((select id from invoices where invoice_no='55120'), '2026-09-08', 100, (select id from accounts where kind='cash_drawer'), 'today', t_photo(:cashier)))->>'blocked' = 'true', 'record_payment reports the duplicate as blocked');
+select t_ok((select count(*) from payments where invoice_id = (select id from invoices where invoice_no='55120')) = 2, 'no third payment was saved');
+select t_as(:owner);
+select t_ok((select count(*) from notifications where kind='duplicate_blocked' and user_id = :owner::uuid) = 1, 'owner notified of the blocked duplicate');
+select t_ok((select count(*) from audit_log where action='blocked') = 1, 'blocked attempt is in the audit log');
+
+-- ---------------------------------------------------------------------------
+-- 4. daily sale split, cash part, closing formula, minus alert, closing immutable
+-- ---------------------------------------------------------------------------
+select t_as(:manager, 'Pharmacy Android');
+select t_no_rows($q$ update business_days set opening_cash = 1 where day='2026-09-07' $q$, 'manager cannot change opening cash (owner only)');
+select t_as(:owner, 'Windows laptop');
+update business_days set opening_cash = 52800 where day = '2026-09-07';
+select t_as(:manager, 'Pharmacy Android');
+insert into daily_sales(day, pos_total, credit_total, photo_id) values ('2026-09-07', 104350, 2500, t_photo(:manager));
+insert into daily_sale_lines(daily_sale_id, account_id, amount, photo_id) values
+  ((select id from daily_sales where day='2026-09-07'), (select id from accounts where name='HBL card machine'), 3200, t_photo(:manager)),
+  ((select id from daily_sales where day='2026-09-07'), (select id from accounts where name='UBL card machine'), 2100, t_photo(:manager)),
+  ((select id from daily_sales where day='2026-09-07'), (select id from accounts where name='Alfalah card machine'), 1200, t_photo(:manager)),
+  ((select id from daily_sales where day='2026-09-07'), (select id from accounts where name='EasyPaisa'), 2500, t_photo(:manager)),
+  ((select id from daily_sales where day='2026-09-07'), (select id from accounts where name='JazzCash'), 1500, t_photo(:manager));
+select t_ok(sale_cash_part((select id from daily_sales where day='2026-09-07')) = 91350, 'cash part of the sale is 91,350');
+select t_expect_error(
+  $q$ insert into daily_sale_lines(daily_sale_id, account_id, amount, photo_id) values
+      ((select id from daily_sales where day='2026-09-07'), (select id from accounts where name='SadaPay'), 999999, t_photo('00000000-0000-0000-0000-000000000002')) $q$,
+  'PA005', 'card/online/credit exceeding the POS total is rejected');
+select t_expect_error(
+  $q$ insert into daily_sale_lines(daily_sale_id, account_id, amount, photo_id) values
+      ((select id from daily_sales where day='2026-09-07'), (select id from accounts where kind='cash_drawer'), 5, t_photo('00000000-0000-0000-0000-000000000002')) $q$,
+  'PA004', 'cash drawer cannot be a sale line');
+
+-- credit collection in cash, an expense in cash
+insert into customer_credit_collections(customer_id, day, amount, account_id, photo_id)
+  values ((select id from customers where name='Rashid Ali'), '2026-09-07', 1200, (select id from accounts where kind='cash_drawer'), t_photo(:manager));
+select t_as(:cashier, 'Own Android');
+insert into expenses(day, category_id, amount, note, account_id, photo_id)
+  values ('2026-09-07', (select id from expense_categories where name='Bike fuel'), 4250, 'fuel', (select id from accounts where kind='cash_drawer'), t_photo(:cashier));
+
+-- expected = 52,800 + 91,350 + 1,200 - 27,400 - 4,250 = 1,13,700
+select t_ok((select expected_cash from cash_book('2026-09-07')) = 113700, 'drawer should hold 1,13,700');
+
+-- cashier cannot close; manager can; minus alerts owner
+select t_expect_error($q$ select submit_closing('2026-09-07', 113000, t_photo('00000000-0000-0000-0000-000000000003')) $q$, '42501', 'cashier cannot submit a closing');
+select t_as(:manager, 'Pharmacy Android');
+select submit_closing('2026-09-07', 114640, t_photo(:manager));
+select t_ok((select difference from closings where day='2026-09-07') = 940, 'difference is +940');
+select t_ok((select status from business_days where day='2026-09-07') = 'closed', 'day is closed');
+select t_ok((select opening_cash from business_days where day='2026-09-08') = 114640, 'next day opens with the counted cash');
+select t_as(:owner);
+select t_ok((select count(*) from notifications where kind='closing_submitted') = 1, 'owner notified of the closing');
+select t_no_rows($q$ update closings set counted_cash = 1 where day='2026-09-07' $q$, 'a closing cannot be edited even by the owner');
+select t_no_rows($q$ delete from closings where day='2026-09-07' $q$, 'a closing cannot be deleted even by the owner');
+select t_ok((select counted_cash from closings where day='2026-09-07') = 114640, 'closing unchanged');
+select t_expect_error($q$ select submit_closing('2026-09-07', 1, t_photo('00000000-0000-0000-0000-000000000001')) $q$, '23505', 'a second closing for the same day is rejected');
+
+-- ---------------------------------------------------------------------------
+-- 5. approve & lock; locked day rejects everything; unlock needs a reason and is logged
+-- ---------------------------------------------------------------------------
+select t_as(:manager);
+select t_expect_error($q$ select approve_day('2026-09-07') $q$, '42501', 'manager cannot approve a day');
+select t_as(:owner, 'Windows laptop');
+select approve_day('2026-09-07');
+select t_ok(day_is_locked('2026-09-07'), 'day is locked');
+select t_as(:cashier, 'Own Android');
+select t_expect_error(
+  $q$ insert into expenses(day, category_id, amount, account_id, photo_id)
+      values ('2026-09-07', (select id from expense_categories where name='Other'), 10, (select id from accounts where kind='cash_drawer'), t_photo('00000000-0000-0000-0000-000000000003')) $q$,
+  'PA001', 'no new entry on a locked day');
+select t_as(:owner);
+begin;
+select set_config('app.reason', 'try', true);
+select t_expect_error($q$ update expenses set amount = 1 where day='2026-09-07' $q$, 'PA001', 'owner cannot edit inside a locked day');
+rollback;
+select t_expect_error($q$ select unlock_day('2026-09-07', '') $q$, 'PA002', 'unlock without reason is rejected');
+select unlock_day('2026-09-07', 'manager counted a note twice');
+select t_ok(not day_is_locked('2026-09-07'), 'day unlocked');
+select t_ok((select count(*) from closings where day='2026-09-07') = 0, 'old closing removed so it can be redone');
+select t_ok((select count(*) from audit_log where action='unlock' and table_name='closings' and before is not null) = 1, 'old closing kept in the audit log');
+
+-- ---------------------------------------------------------------------------
+-- 6. staff accounts owner-only; WAW loans; owner-paid settlements; non-cash pool
+-- ---------------------------------------------------------------------------
+select t_as(:manager);
+select t_expect_error(
+  $q$ insert into staff_entries(staff_id, day, kind, amount, photo_id) values ('00000000-0000-0000-0000-000000000003', '2026-09-08', 'advance_sale_cash', 5000, t_photo('00000000-0000-0000-0000-000000000002')) $q$,
+  '42501', 'manager cannot add a staff advance');
+select t_as(:owner);
+insert into staff_entries(staff_id, day, kind, amount, photo_id) values (:cashier, '2026-09-08', 'advance_sale_cash', 5000, t_photo(:owner));
+insert into staff_entries(staff_id, day, kind, amount, photo_id, bill_no) values (:cashier, '2026-09-08', 'medicine_credit', 1350, t_photo(:owner), '4471');
+insert into staff_entries(staff_id, day, kind, amount, photo_id) values (:cashier, '2026-09-08', 'salary_deduction', 2000, t_photo(:owner));
+select t_ok((select owed from v_staff_balance where id = :cashier::uuid) = 4350, 'staff owes 4,350');
+select t_as(:cashier);
+select t_ok((select count(*) from staff_entries) = 3, 'cashier can see own staff entries');
+select t_as(:manager);
+select t_ok((select count(*) from staff_entries) = 0, 'manager cannot see another staff member''s entries');
+
+-- WAW
+select t_as(:cashier, 'Own Android');
+select t_expect_error(
+  $q$ insert into waw_loans(day, kind, amount, account_id, photo_id) values ('2026-09-08', 'repay', 100, (select id from accounts where kind='cash_drawer'), t_photo('00000000-0000-0000-0000-000000000003')) $q$,
+  'PA008', 'cannot repay WAW more than owed');
+insert into waw_loans(day, kind, amount, account_id, handled_by, photo_id) values ('2026-09-08', 'borrow', 40000, (select id from accounts where kind='cash_drawer'), 'Ahmed', t_photo(:cashier));
+insert into waw_loans(day, kind, amount, account_id, handled_by, photo_id) values ('2026-09-08', 'repay', 5000, (select id from accounts where kind='cash_drawer'), 'Bilal', t_photo(:cashier));
+select t_ok(waw_outstanding() = 35000, 'WAW outstanding is 35,000');
+select t_ok((select waw_borrowed_cash - waw_repaid_cash from cash_book('2026-09-08')) = 35000, 'WAW cash movement is in the cash book');
+select t_as(:owner);
+select run_daily_jobs();
+select t_ok((select count(*) from notifications where kind='waw_outstanding') = 1, 'owner gets the WAW daily reminder');
+
+-- owner-paid invoice and settlement against receipts
+select t_as(:cashier, 'Own Android');
+insert into invoices(distributor_id, invoice_no, day, amount, photo_id)
+  values ((select id from distributors where name='Muller & Phipps'), '30412', '2026-09-08', 28500, t_photo(:cashier));
+insert into payments(invoice_id, day, amount, account_id, photo_id)
+  values ((select id from invoices where invoice_no='30412'), '2026-09-08', 28500, (select id from accounts where kind='owner_personal'), t_photo(:cashier));
+select t_ok((select requested_by from payments where amount=28500) = :cashier::uuid, 'owner-paid request records who asked');
+select t_as(:owner);
+select t_ok((select count(*) from notifications where kind='owner_paid_request') = 1, 'owner notified of the personal-account payment');
+select t_ok((select unsettled from v_owner_paid where invoice_no='30412') = 28500, 'owed to owner is 28,500');
+select t_expect_error(
+  $q$ insert into owner_settlements(payment_id, day, kind, account_id, amount, photo_id)
+      values ((select payment_id from v_owner_paid where invoice_no='30412'), '2026-09-08', 'minus_receipts', (select id from accounts where kind='cash_drawer'), 100, t_photo('00000000-0000-0000-0000-000000000001')) $q$,
+  'PA011', 'minus must come from a card machine, wallet or bank');
+insert into owner_settlements(payment_id, day, kind, account_id, amount, photo_id)
+  values ((select payment_id from v_owner_paid where invoice_no='30412'), '2026-09-08', 'minus_receipts', (select id from accounts where name='UBL card machine'), 28500, t_photo(:owner));
+select t_ok((select unsettled from v_owner_paid where invoice_no='30412') = 0, 'settled in full by minusing from UBL machine');
+select t_expect_error(
+  $q$ insert into owner_settlements(payment_id, day, kind, account_id, amount, photo_id)
+      values ((select payment_id from v_owner_paid where invoice_no='30412'), '2026-09-08', 'cash_return', null, 1, t_photo('00000000-0000-0000-0000-000000000001')) $q$,
+  'PA010', 'cannot settle more than the payment');
+select t_ok((select received from non_cash_pool('2026-09-01','2026-09-30') where account_name='UBL card machine') = 2100, 'non-cash pool shows UBL machine receipts');
+select t_ok((select minused from non_cash_pool('2026-09-01','2026-09-30') where account_name='UBL card machine') = 28500, 'non-cash pool shows the minus');
+
+-- ---------------------------------------------------------------------------
+-- 7. reminders, posted-in-POS, distributor balance view
+-- ---------------------------------------------------------------------------
+select t_as(:cashier);
+insert into reminders(invoice_id, title, amount, remind_at, notify_all) values ((select id from invoices where invoice_no='30412'), 'Pay M&P', 1000, now() - interval '1 minute', true);
+select t_as(:owner);
+select run_daily_jobs();
+select t_ok((select count(*) from reminders where done_at is null) = 1, 'reminder set (invoice was paid before reminder existed, so still open)');
+select t_ok((select count(*) from notifications where kind='payment_reminder' and user_id = :owner::uuid) = 1, 'reminder fired to owner');
+select t_as(:cashier);
+select t_ok((select count(*) from notifications where kind='payment_reminder' and user_id = :cashier::uuid) = 1, 'reminder fired to cashier too (notify all)');
+select t_expect_error($q$ select mark_posted((select id from invoices where invoice_no='30412')) $q$, '42501', 'cashier cannot mark posted in POS');
+select t_as(:manager);
+select mark_posted((select id from invoices where invoice_no='30412'));
+select t_ok((select posted_in_pos from invoices where invoice_no='30412'), 'manager marked invoice posted in POS');
+select t_ok((select pending from v_distributor_balance where name='Getz Pharma') = 0 and (select pending from v_distributor_balance where name='Muller & Phipps') = 0, 'distributor balances are zero after full payment');
+
+reset role;
+select 'ALL RULE TESTS PASSED' as result;
+
+-- ---------------------------------------------------------------------------
+-- 8. owner_edit / owner_delete / range_summary
+-- ---------------------------------------------------------------------------
+set role app_user;
+select t_as(:manager);
+select t_expect_error($q$ select owner_edit('expenses', (select id from expenses limit 1), '{"amount": 1}', 'x') $q$, '42501', 'manager cannot use owner_edit');
+select t_as(:owner);
+select t_expect_error($q$ select owner_edit('expenses', (select id from expenses limit 1), '{"amount": 1}', '') $q$, 'PA002', 'owner_edit needs a reason');
+select t_expect_error($q$ select owner_edit('expenses', (select id from expenses limit 1), '{"entered_by": "00000000-0000-0000-0000-000000000001"}', 'r') $q$, 'PA021', 'owner_edit cannot change who entered it');
+select t_ok((owner_edit('expenses', (select id from expenses limit 1), '{"amount": 1500}', 'typed 4250 by mistake')->>'amount')::numeric = 1500, 'owner_edit changes the amount');
+select t_ok((select count(*) from audit_log where table_name='expenses' and action='update' and reason='typed 4250 by mistake') = 1, 'owner_edit is audited with the reason');
+select t_ok((range_summary('2026-09-01','2026-09-30')->>'expenses')::numeric = 1500, 'range summary reflects the correction');
+select t_ok((range_summary('2026-09-01','2026-09-30')->>'owed_to_waw')::numeric = 35000, 'range summary shows WAW owed');
+reset role;
+select 'ALL RULE TESTS PASSED (incl. api)' as result;

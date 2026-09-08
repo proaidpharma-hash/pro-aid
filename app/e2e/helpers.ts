@@ -30,9 +30,12 @@ export function jpegFixture() {
   jpg = fs.readFileSync(p);
   return jpg;
 }
+let photoSeq = 0;
+// every proof must be a different picture (the duplicate-photo guard): trailing bytes after the JPEG end marker change the hash, not the image
 export async function attachPhoto(page: Page, nth = 0) {
   const inputs = page.getByTestId('photo-gallery');
-  await inputs.nth(nth).setInputFiles({ name: 'proof.jpg', mimeType: 'image/jpeg', buffer: jpegFixture() });
+  const unique = Buffer.concat([jpegFixture(), Buffer.from(`proaid-e2e-${process.pid}-${Date.now()}-${photoSeq++}`)]);
+  await inputs.nth(nth).setInputFiles({ name: 'proof.jpg', mimeType: 'image/jpeg', buffer: unique });
   await expect(page.getByTestId('photo-picker').nth(nth)).toContainText('attached', { timeout: 15000 });
 }
 export async function toastSeen(page: Page, text: string | RegExp) {

@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { TopBar } from '../components/Shell';
 import { Card, Field, AmountInput, amountOf, PhotoPicker, Button, Notice, Spinner, Pill, ProofLink, Chips, Empty, Sheet, Icon } from '../components/ui';
-import { useStore, useIsOwner } from '../lib/store';
+import { useStore, useIsOwner, useCanWrite } from '../lib/store';
 import * as api from '../lib/api';
 import { DiffSettleSheet } from '../components/Posting';
 import { today, num, fmtShort, initials, fmtDay } from '../lib/format';
@@ -10,6 +10,7 @@ import type { ProofPhoto } from '../lib/photos';
 
 // ---- Distributors ---------------------------------------------------------------
 export function DistributorsPage() {
+  const canWrite = useCanWrite();
   const refreshKey = useStore((s) => s.refreshKey);
   const [rows, setRows] = useState<api.DistributorBalance[] | null>(null);
   const [q, setQ] = useState('');
@@ -20,7 +21,7 @@ export function DistributorsPage() {
   const total = (rows ?? []).reduce((s, r) => s + r.pending, 0);
   return (
     <>
-      <TopBar title="Distributors" sub={`${rows?.length ?? 0} active · ${num(total)} pending in total`} right={<Link to="/purchases/new" className="btn primary">+ Add purchase</Link>} />
+      <TopBar title="Distributors" sub={`${rows?.length ?? 0} active · ${num(total)} pending in total`} right={canWrite && (<Link to="/purchases/new" className="btn primary">+ Add purchase</Link>)} />
       <div className="content">
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
           <input className="input" style={{ maxWidth: 260 }} placeholder="Search distributor" value={q} onChange={(e) => setQ(e.target.value)} />
@@ -33,6 +34,7 @@ export function DistributorsPage() {
 }
 
 export function DistributorDetail() {
+  const canWrite = useCanWrite();
   const { id } = useParams();
   const accounts = useStore((s) => s.accounts);
   const refreshKey = useStore((s) => s.refreshKey);
@@ -70,7 +72,7 @@ export function DistributorDetail() {
   const rows: Row[] = [...invoices.map((i) => ({ at: i.created_at, day: i.day, kind: 'invoice' as const, inv: i })), ...payments.map((p) => ({ at: p.created_at, day: p.day, kind: 'payment' as const, inv: invoices.find((i) => i.id === p.invoice_id)!, pay: p }))].sort((a, b) => (b.day + b.at).localeCompare(a.day + a.at));
   return (
     <>
-      <TopBar title={d.name} sub={[d.rep_name && `Rep: ${d.rep_name}`, d.phone, d.delivery_days && `delivers ${d.delivery_days}`].filter(Boolean).join(' · ')} back right={<><Link className="btn" to={`/purchases/new?distributor=${d.id}`}>Add purchase</Link><Link className="btn primary" to={`/pay?distributor=${d.id}`}>Record payment</Link></>} />
+      <TopBar title={d.name} sub={[d.rep_name && `Rep: ${d.rep_name}`, d.phone, d.delivery_days && `delivers ${d.delivery_days}`].filter(Boolean).join(' · ')} back right={canWrite && (<><Link className="btn" to={`/purchases/new?distributor=${d.id}`}>Add purchase</Link><Link className="btn primary" to={`/pay?distributor=${d.id}`}>Record payment</Link></>)} />
       <div className="content">
         <div className="grid grid-3">
           <div className="card kpi warn"><div className="label">Pending now</div><div className="value num">{num(pending)}</div>{d.opening_balance > 0 && <div className="hint">includes opening balance {num(d.opening_balance)}</div>}</div>
@@ -118,6 +120,7 @@ export function ReminderSheet({ invoice, onClose }: { invoice: api.InvoiceStatus
 
 // ---- Customers (credit) ----------------------------------------------------------
 export function CustomersPage() {
+  const canWrite = useCanWrite();
   const profile = useStore((s) => s.profile)!;
   const accounts = useStore((s) => s.accounts);
   const refreshKey = useStore((s) => s.refreshKey);
@@ -137,7 +140,7 @@ export function CustomersPage() {
   const ph = (pid: string | null) => (pid ? photos.find((p) => p.id === pid)?.storage_path : undefined);
   return (
     <>
-      <TopBar title="Customer credit" sub={`Who owes the pharmacy · ${num(total)}`} right={<><Button onClick={() => setSheet('bill')}>New credit bill</Button><Button kind="primary" onClick={() => setSheet('collect')}>Collect payment</Button></>} />
+      <TopBar title="Customer credit" sub={`Who owes the pharmacy · ${num(total)}`} right={canWrite && (<><Button onClick={() => setSheet('bill')}>New credit bill</Button><Button kind="primary" onClick={() => setSheet('collect')}>Collect payment</Button></>)} />
       <div className="content">
         <Chips options={[{ value: 'owing', label: 'Owing' }, { value: 'old', label: 'Over 15 days' }, { value: 'clear', label: 'Cleared' }]} value={tab} onChange={setTab} />
         {!rows ? <Spinner /> : list.length === 0 ? <Card><Empty>Nobody here</Empty></Card> : list.map((c) => (
@@ -197,7 +200,7 @@ export function StaffPage() {
   const profile = useStore((s) => s.profile)!;
   const [rows, setRows] = useState<api.StaffBalance[] | null>(null);
   useEffect(() => { api.staffBalances().then(setRows).catch(() => undefined); }, [refreshKey]);
-  const list = (rows ?? []).filter((r) => profile.role === 'owner' || r.id === profile.id);
+  const list = (rows ?? []).filter((r) => profile.role === 'owner' || profile.role === 'viewer' || r.id === profile.id);
   return (
     <>
       <TopBar title="Staff accounts" sub={profile.role === 'owner' ? 'Advances and medicine on credit · added by the owner only' : 'Your account'} />
@@ -259,6 +262,7 @@ function StaffSheet({ kind, staffId, owed, userId, onClose, onSaved }: { kind: '
 
 // ---- WAW F/S loans & owner money -------------------------------------------------
 export function WawPage() {
+  const canWrite = useCanWrite();
   const profile = useStore((s) => s.profile)!;
   const accounts = useStore((s) => s.accounts);
   const isOwner = useIsOwner();
@@ -278,7 +282,7 @@ export function WawPage() {
   const ph = (id: string | null) => (id ? photos.find((p) => p.id === id)?.storage_path : undefined);
   return (
     <>
-      <TopBar title="WAW F/S & owner money" sub="Loans from the fuel station and invoices paid from the owner's account" right={<><Button onClick={() => setSheet('borrow')}>Borrow from WAW F/S</Button><Button kind="primary" onClick={() => setSheet('repay')} disabled={owed <= 0}>Repay WAW F/S</Button>{isOwner && <Button onClick={() => navigate('/noncash')}>Non-cash received</Button>}</>} />
+      <TopBar title="WAW F/S & owner money" sub="Loans from the fuel station and invoices paid from the owner's account" right={canWrite && (<><Button onClick={() => setSheet('borrow')}>Borrow from WAW F/S</Button><Button kind="primary" onClick={() => setSheet('repay')} disabled={owed <= 0}>Repay WAW F/S</Button>{isOwner && <Button onClick={() => navigate('/noncash')}>Non-cash received</Button>}</>)} />
       <div className="content">
         <div className="grid grid-2"><div className={`card kpi ${owed > 0 ? 'danger' : 'ok'}`}><div className="label">Owed to WAW F/S</div><div className="value num" data-testid="waw-owed">{num(owed)}</div><div className="hint">{owed > 0 ? 'Owner is notified every morning until repaid in full' : 'Nothing owed'}</div></div><div className="card kpi accent"><div className="label">Owed to owner (personal account)</div><div className="value num">{num(owedOwner)}</div><div className="hint">{ownerPaid.filter((o) => o.unsettled > 0).length} invoices not yet settled</div></div></div>
         <Card title="Borrowed from WAW F/S">{loans.length === 0 ? <Empty>No loans</Empty> : loans.map((l) => <div className="row" key={l.id}><div className="datebox"><b>{fmtShort(l.day).split(' ')[0]}</b><span>{fmtShort(l.day).split(' ')[1].toUpperCase()}</span></div><div className="grow"><span className="t">{l.kind === 'borrow' ? 'Borrowed' : 'Repaid'} · {accounts.find((a) => a.id === l.account_id)?.kind === 'cash_drawer' ? 'cash' : accounts.find((a) => a.id === l.account_id)?.name}</span><span className="s">{l.handled_by ? `${l.handled_by} · ` : ''}{l.note ? `${l.note} · ` : ''}by {who(l.entered_by)}</span></div><ProofLink storagePath={ph(l.photo_id)} /><span className={`amt num ${l.kind === 'borrow' ? 'danger' : 'ok'}`}>{l.kind === 'borrow' ? '+ ' : '− '}{num(l.amount)}</span></div>)}</Card>

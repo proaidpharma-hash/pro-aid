@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { TopBar } from '../components/Shell';
 import { Card, Field, AmountInput, amountOf, PhotoPicker, Button, Notice, Spinner, Pill, ProofLink, Chips, Empty, Sheet } from '../components/ui';
-import { useStore, useIsManagerOrOwner, useIsOwner } from '../lib/store';
+import { useStore, useIsManagerOrOwner, useIsOwner, useCanWrite } from '../lib/store';
 import * as api from '../lib/api';
 import { PaymentLinesEditor, useSourceOptions, paymentLinesTotal, paymentLinesProblem, postPaymentLines, newLine, type PaymentLine } from '../components/PaymentLines';
 import { PostedSheet } from '../components/Posting';
@@ -12,6 +12,7 @@ import type { ProofPhoto } from '../lib/photos';
 type Tab = 'all' | 'unpaid' | 'installments' | 'unposted';
 
 export function PurchasesPage() {
+  const canWrite = useCanWrite();
   const [params, setParams] = useSearchParams();
   const tab = (params.get('tab') as Tab) || 'all';
   const refreshKey = useStore((s) => s.refreshKey);
@@ -33,7 +34,7 @@ export function PurchasesPage() {
   const days = (d: string) => Math.max(0, Math.round((new Date(today()).getTime() - new Date(d).getTime()) / 86400000));
   return (
     <>
-      <TopBar title="Purchases" sub="Every invoice received, with payment and POS posting status" right={<Link to="/purchases/new" className="btn primary">+ Add purchase</Link>} />
+      <TopBar title="Purchases" sub="Every invoice received, with payment and POS posting status" right={canWrite && (<Link to="/purchases/new" className="btn primary">+ Add purchase</Link>)} />
       <div className="content">
         <div className="chips">
           {(['all', 'unpaid', 'installments', 'unposted'] as Tab[]).map((t) => <button key={t} type="button" className={`chip ${tab === t ? (t === 'unposted' ? 'warn on' : 'on') : ''}`} onClick={() => setParams({ tab: t })}>{t === 'all' ? 'All' : t === 'unpaid' ? 'Unpaid' : t === 'installments' ? 'On installments' : `Not posted in POS${tab === 'all' && unpostedCount ? ` · ${unpostedCount}` : ''}`}</button>)}
@@ -213,6 +214,8 @@ export function ExpenseNew() {
   const navigate = useNavigate();
   const [cats, setCats] = useState<api.ExpenseCategory[]>([]);
   const [catId, setCatId] = useState('');
+  const [budgets, setBudgets] = useState<api.BudgetStatus[]>([]);
+  useEffect(() => { api.expenseBudgetStatus().then(setBudgets).catch(() => undefined); }, []);
   const [amount, setAmount] = useState('');
   const [note, setNote] = useState('');
   const [accountId, setAccountId] = useState('');
@@ -236,6 +239,7 @@ export function ExpenseNew() {
       <div className="content"><div className="form">
         <Card>
           <Field label="Category"><Chips options={cats.map((c) => ({ value: c.id, label: c.name }))} value={catId || null} onChange={setCatId} /></Field>
+          {catId && budgets.find((b) => b.category_id === catId)?.budget !== null && budgets.find((b) => b.category_id === catId) && (() => { const b = budgets.find((x) => x.category_id === catId)!; return <Notice kind={b.over || (b.remaining ?? 0) < amountOf(amount) ? 'danger' : 'info'}>{b.over ? `This category is already over its monthly budget (${num(b.spent)} of ${num(b.budget)}). The owner will be alerted.` : `Budget this month: ${num(b.budget)} · spent ${num(b.spent)} · ${num(b.remaining ?? 0)} left${amountOf(amount) > (b.remaining ?? 0) ? ' — this expense crosses it' : ''}`}</Notice>; })()}
           <Field label="Amount"><AmountInput id="expense-amount" value={amount} onChange={setAmount} /></Field>
           <Field label="Note"><input className="input" value={note} onChange={(e) => setNote(e.target.value)} placeholder="e.g. Petrol for delivery bike" data-testid="expense-note" /></Field>
           <Field label="Paid from"><Chips options={accounts.filter((a) => ['cash_drawer', 'wallet', 'bank'].includes(a.kind)).map((a) => ({ value: a.id, label: a.kind === 'cash_drawer' ? 'Cash drawer' : a.name }))} value={accountId || null} onChange={setAccountId} /></Field>
@@ -251,6 +255,7 @@ export function ExpenseNew() {
 }
 
 export function ExpensesPage() {
+  const canWrite = useCanWrite();
   const accounts = useStore((s) => s.accounts);
   const refreshKey = useStore((s) => s.refreshKey);
   const isOwner = useIsOwner();
@@ -268,7 +273,7 @@ export function ExpensesPage() {
   const byCat = cats.map((c) => ({ c, amt: rows?.filter((r) => r.category_id === c.id).reduce((s, r) => s + r.amount, 0) ?? 0 })).filter((x) => x.amt > 0).sort((a, b) => b.amt - a.amt);
   return (
     <>
-      <TopBar title="Expenses" sub={`Total ${num(total)}`} right={<Link to="/expenses/new" className="btn primary">+ Add expense</Link>} />
+      <TopBar title="Expenses" sub={`Total ${num(total)}`} right={canWrite && (<Link to="/expenses/new" className="btn primary">+ Add expense</Link>)} />
       <div className="content">
         <Chips options={[{ value: 'today', label: 'Today' }, { value: 'week', label: 'Last 7 days' }, { value: 'month', label: 'This month' }]} value={range} onChange={setRange} />
         {byCat.length > 0 && <Card title="By category">{byCat.map(({ c, amt }) => <div key={c.id} style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 13 }}><span style={{ width: 120, fontWeight: 600 }}>{c.name}</span><div className="bar" style={{ flex: 1 }}><div style={{ width: `${(amt / byCat[0].amt) * 100}%` }} /></div><span className="num" style={{ width: 70, textAlign: 'right', fontWeight: 700 }}>{num(amt)}</span></div>)}</Card>}

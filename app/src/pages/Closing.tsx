@@ -8,6 +8,7 @@ import { today, fmtDay, num, fmtDateTime } from '../lib/format';
 import type { ProofPhoto } from '../lib/photos';
 import { PostingCheck } from '../components/Posting';
 import { exportDayPdf } from '../lib/daypdf';
+import { SpotCountSheet, SpotCountsCard } from './Control';
 
 // Daily closing: the app adds up what the drawer should hold; the manager counts; the difference is the control figure.
 export default function Closing() {
@@ -21,6 +22,7 @@ export default function Closing() {
   const [denoms, setDenoms] = useState<Denominations>({});
   const [fromSale, setFromSale] = useState(false);
   const [blocked, setBlocked] = useState(0);
+  const [spot, setSpot] = useState(false);
   const [photo, setPhoto] = useState<ProofPhoto | null>(null);
   const [note, setNote] = useState('');
   const [busy, setBusy] = useState(false);
@@ -60,6 +62,7 @@ export default function Closing() {
   return (
     <>
       <TopBar title="Daily closing" sub={`${fmtDay(day)} · ${profile.role === 'cashier' ? 'view only' : profile.name}`} back right={<>
+        {!sale && !closing && (profile.role === 'owner' || profile.role === 'manager') && <Button onClick={() => setSpot(true)} data-testid="spot-count">Surprise count…</Button>}
         {closing && <Button onClick={() => exportDayPdf(day).catch((e: Error) => toast(e.message, 'danger'))} data-testid="day-pdf"><Icon.Download size={14} /> Day PDF</Button>}
         {bday?.status === 'approved' && <Pill kind="ok"><Icon.Lock size={12} /> Approved & locked</Pill>}
         {isOwner && bday?.status === 'closed' && <Button kind="primary" onClick={approve} disabled={busy} data-testid="approve-day">Approve & lock day</Button>}
@@ -67,6 +70,7 @@ export default function Closing() {
       </>} />
       <div className="content">
         <div className="form" style={{ maxWidth: 720 }}>
+          <SpotCountsCard from={day} to={day} title="Surprise counts today" />
           {!sale && <Card kind="warn"><b>Step 1 · Record the daily sale first</b><span className="help">The closing needs the POS total and its split.</span>{profile.role !== 'cashier' && <Link className="btn primary" to={`/sales/new?day=${day}`} style={{ alignSelf: 'flex-start' }}>Record daily sale</Link>}</Card>}
           {sale && <Card title={<span><span className="pill ok"><Icon.Check size={12} /></span> POS system total</span>} right={<ProofLink storagePath={photoPath(sale.photo_id)} label="POS photo" />}>
             <div className="grid grid-4">
@@ -100,7 +104,7 @@ export default function Closing() {
               {closing.note && <div className="help">Note: {closing.note}</div>}
             </Card>
             <Notice kind={bday?.status === 'approved' ? 'ok' : 'info'}>{bday?.status === 'approved' ? 'This day is approved and locked. Nothing in it can change unless the owner unlocks it with a reason.' : 'Closing submitted and cannot be edited. Waiting for the owner to approve and lock the day.'}</Notice>
-          </> : profile.role !== 'cashier' && sale ? <>
+          </> : (profile.role === 'owner' || profile.role === 'manager') && sale ? <>
             <PostingCheck day={day} canPost onChange={setBlocked} />
             <Card kind="outline" title={<span><span className="pill accent">3</span> Count the drawer · note by note</span>} right={fromSale ? <span className="help">from the count done at the sale</span> : undefined}>
               <DenominationCount value={denoms} onChange={(d) => { setDenoms(d); setFromSale(false); }} />
@@ -116,6 +120,7 @@ export default function Closing() {
           </Card>}
         </div>
       </div>
+      {spot && <SpotCountSheet day={day} userId={profile.id} onClose={() => setSpot(false)} onSaved={() => { setSpot(false); useStore.getState().bump(); }} />}
       {unlock && <Sheet title="Unlock this day" onClose={() => setUnlock(false)}>
         <Notice kind="warn">Unlocking removes the closing (it stays in the audit log) so the manager can count again. Every entry becomes editable by you with a reason.</Notice>
         <Field label="Reason (required)"><textarea className="textarea" value={reason} onChange={(e) => setReason(e.target.value)} placeholder="e.g. manager counted a bundle twice" /></Field>

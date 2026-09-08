@@ -33,26 +33,26 @@ export default function App() {
         <Route path="/login" element={profile ? <Navigate to="/" replace /> : <><Login /><Toasts /></>} />
         <Route element={<Guard><Shell /></Guard>}>
           <Route path="/" element={<Today />} />
-          <Route path="/sales" element={<Guard roles={['owner', 'manager']}><SalesPage /></Guard>} />
+          <Route path="/sales" element={<Guard roles={['owner', 'manager', 'viewer']}><SalesPage /></Guard>} />
           <Route path="/sales/new" element={<Guard roles={['owner', 'manager']}><SaleNew /></Guard>} />
-          <Route path="/receipts/new" element={<ReceiptNew />} />
-          <Route path="/credit/new" element={<CreditBillNew />} />
+          <Route path="/receipts/new" element={<Guard roles={['owner', 'manager', 'cashier']}><ReceiptNew /></Guard>} />
+          <Route path="/credit/new" element={<Guard roles={['owner', 'manager', 'cashier']}><CreditBillNew /></Guard>} />
           <Route path="/closing" element={<Closing />} />
           <Route path="/purchases" element={<PurchasesPage />} />
-          <Route path="/purchases/new" element={<PurchaseNew />} />
-          <Route path="/pay" element={<PayPage />} />
+          <Route path="/purchases/new" element={<Guard roles={['owner', 'manager', 'cashier']}><PurchaseNew /></Guard>} />
+          <Route path="/pay" element={<Guard roles={['owner', 'manager', 'cashier']}><PayPage /></Guard>} />
           <Route path="/expenses" element={<ExpensesPage />} />
-          <Route path="/expenses/new" element={<ExpenseNew />} />
+          <Route path="/expenses/new" element={<Guard roles={['owner', 'manager', 'cashier']}><ExpenseNew /></Guard>} />
           <Route path="/distributors" element={<DistributorsPage />} />
           <Route path="/distributors/:id" element={<DistributorDetail />} />
           <Route path="/customers" element={<CustomersPage />} />
           <Route path="/staff" element={<StaffPage />} />
           <Route path="/staff/:id" element={<StaffDetail />} />
           <Route path="/waw" element={<WawPage />} />
-          <Route path="/noncash" element={<Guard roles={['owner']}><NonCashPage /></Guard>} />
-          <Route path="/insights" element={<Guard roles={['owner']}><InsightsPage /></Guard>} />
-          <Route path="/reports" element={<Guard roles={['owner', 'manager']}><ReportsPage /></Guard>} />
-          <Route path="/settings" element={<Guard roles={['owner']}><SettingsPage /></Guard>} />
+          <Route path="/noncash" element={<Guard roles={['owner', 'viewer']}><NonCashPage /></Guard>} />
+          <Route path="/insights" element={<Guard roles={['owner', 'viewer']}><InsightsPage /></Guard>} />
+          <Route path="/reports" element={<Guard roles={['owner', 'manager', 'viewer']}><ReportsPage /></Guard>} />
+          <Route path="/settings" element={<Guard roles={['owner', 'viewer']}><SettingsPage /></Guard>} />
           <Route path="/notifications" element={<NotificationsPage />} />
           <Route path="/ledgers" element={<LedgersHub />} />
           <Route path="/more" element={<MoreHub />} />

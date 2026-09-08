@@ -10,6 +10,8 @@ import { createStaffLogin, isValidPhone, isValidPin, resetPin, changeOwnPin } fr
 import { SettleSheet } from './Ledgers';
 import { exportReportPdf } from '../lib/pdf';
 import { alertsEnabled, enableAlerts } from '../lib/realtime';
+import { ReconciliationCard, BudgetsCard, ScorecardCard, DigestCard, AlertsSettings, SpotCountsCard } from './Control';
+import { useIsViewer } from '../lib/store';
 
 type RangeKey = 'today' | 'week' | '15' | 'month' | 'lastmonth' | 'year' | 'lastyear' | 'custom';
 export function useRange(initial: RangeKey = 'month') {
@@ -69,6 +71,7 @@ export function NonCashPage() {
             {ownerPaid.length === 0 ? <Empty>None</Empty> : ownerPaid.map((o) => <div className="row" key={o.payment_id}><div className="grow"><span className="t">{o.distributor_name} · Inv {o.invoice_no}</span><span className="s">{fmtShort(o.day)}{o.unsettled <= 0 ? <> · <span className="ok">minused {settlements.filter((s) => s.payment_id === o.payment_id).map((s) => `${fmtShort(s.day)} · ${s.kind === 'cash_return' ? 'cash' : s.account_id ? accounts.find((a) => a.id === s.account_id)?.name : 'overall'}`).join(', ')}</span></> : o.settled > 0 ? ` · ${num(o.settled)} minused · ${num(o.unsettled)} left` : ''}</span></div><span className="amt num">{num(o.amount)}</span>{o.unsettled > 0 && <Button size="sm" kind="primary" onClick={() => setSettle(o)}>Minus from…</Button>}</div>)}
           </Card>
         </div>
+        <ReconciliationCard from={range.from} to={range.to} />
       </div>
       {settle && <SettleSheet item={settle} userId={profile.id} onClose={() => setSettle(null)} onSaved={() => { setSettle(null); useStore.getState().bump(); }} />}
     </>
@@ -140,6 +143,9 @@ export function InsightsPage() {
             </Card>
           </div>
         </div>
+        <DigestCard />
+        <ScorecardCard from={range.from} to={range.to} />
+        <div className="grid grid-2 stack"><BudgetsCard editable={false} month={range.from} /><div><SpotCountsCard from={range.from} to={range.to} /></div></div>
       </div>
     </>
   );
@@ -162,6 +168,32 @@ export function ReportsPage() {
   const nonCashReceived = pool.rows.reduce((t, r) => t + r.received, 0);
   const minused = pool.rows.reduce((t, r) => t + r.minused, 0) + pool.overallMinus;
   const inv = (id: string) => invoices.find((i) => i.id === id);
+  // 10. month-end statement: everything the owner (or an accountant) needs on paper, no photos
+  const statement = async () => {
+    setBusy(true);
+    try {
+      const [budgets, recon, score, spots] = await Promise.all([api.expenseBudgetStatus(range.from), api.cardReconciliation(range.from, range.to), api.staffScorecard(range.from, range.to), api.listSpotCounts(range.from, range.to)]);
+      const card = s.by_account.filter((a) => a.kind === 'card_machine'); const onlineAcc = s.by_account.filter((a) => a.kind !== 'card_machine');
+      const sumA = (xs: { amount: number }[]) => xs.reduce((t, x) => t + x.amount, 0);
+      const plus = s.closings.filter((c) => c.difference > 0).reduce((t, c) => t + c.difference, 0);
+      const minus = s.closings.filter((c) => c.difference < 0).reduce((t, c) => t + c.difference, 0);
+      const net = s.pos_total - s.purchases_received - s.expenses - (s.staff_advances - s.staff_recovered);
+      const first = s.closings[0]; const last = s.closings[s.closings.length - 1];
+      await exportReportPdf({
+        title: 'Month-end statement', from: range.from, to: range.to,
+        sections: [
+          { title: 'Sales', rows: [['Total sale (POS)', num(s.pos_total)], ['· Cash', num(s.cash)], ['· Card machines', num(sumA(card))], ...card.map((a) => [`    ${a.name}`, num(a.amount)] as (string | number)[]), ['· Online / bank transfers', num(sumA(onlineAcc))], ...onlineAcc.map((a) => [`    ${a.name}`, num(a.amount)] as (string | number)[]), ['· Credit bills (pay later)', num(s.credit_given)], ['Credit collected in period', num(s.credit_collected)]] },
+          { title: 'Purchases and expenses', rows: [['Stock received (invoices)', num(s.purchases_received)], ['Paid to distributors', num(s.purchases_paid)], ['Expenses', num(s.expenses)], ...s.expenses_by_category.map((c) => [`    ${c.name}`, num(c.amount)] as (string | number)[]), ['Staff advances given', num(s.staff_advances)], ['Staff advances recovered', num(s.staff_recovered)]] },
+          { title: 'Result (money basis)', rows: [['Sales', num(s.pos_total)], ['− Stock received', num(s.purchases_received)], ['− Expenses', num(s.expenses)], ['− Staff advances not recovered', num(s.staff_advances - s.staff_recovered)], ['= Sales minus purchases and expenses', num(net)]] },
+          { title: 'Cash control', rows: [['Days closed', String(s.days_closed)], ['Days approved by owner', String(s.days_approved)], ['Opening cash (first closing day)', first ? num(first.expected) : '—'], ['Closing cash (last closing day)', last ? num(last.counted) : '—'], ['Total plus (extra cash over POS)', num(plus, true)], ['Total minus (short)', num(minus)], ['Net difference', num(plus + minus, true)], ['Surprise counts', String(spots.length)], ['· with a minus', String(spots.filter((x) => x.difference < 0).length)]] },
+          { title: 'Where things stand at period end', rows: [['Owed to distributors', num(s.owed_to_distributors)], ['Distributors owe us (posting differences)', num(s.distributor_diff_pending)], ['Invoices not posted in POS', String(s.unposted_invoices)], ['Owed by customers', num(s.owed_by_customers)], ['Owed by staff', num(s.owed_by_staff)], ['Owed to WAW F/S', num(s.owed_to_waw)], ['Owed to owner (personal account)', num(s.owed_to_owner)]] },
+          { title: 'Card machines vs bank', head: ['Day', 'Machine', 'Machine took', 'Bank paid in', 'Difference'], rows: recon.map((r) => [fmtShort(r.day), r.account_name, num(r.machine), r.settled === null ? 'not settled' : num(r.settled), r.difference === null ? '—' : num(r.difference, true)]) },
+          { title: 'Expense budgets (month of period start)', head: ['Category', 'Budget', 'Spent', 'Left'], rows: budgets.map((b) => [b.name, b.budget === null ? 'no limit' : num(b.budget), num(b.spent), b.remaining === null ? '—' : num(b.remaining)]) },
+          { title: 'Staff scorecard', head: ['Person', 'Days closed', 'Avg plus', 'Minus days', 'Late closings', 'Entries', 'Owner corrections', 'Blocked'], rows: score.map((r) => [r.name, String(r.days_closed), r.avg_difference === null ? '—' : num(r.avg_difference, true), String(r.minus_days), String(r.late_closings), String(r.entries), String(r.owner_corrections), String(r.blocked_attempts)]) },
+        ],
+      });
+    } catch (e) { useStore.getState().toast((e as Error).message, 'danger'); } finally { setBusy(false); }
+  };
   const pdf = async () => {
     setBusy(true);
     try {
@@ -181,7 +213,7 @@ export function ReportsPage() {
   };
   return (
     <>
-      <TopBar title="Reports" sub={`${fmtDay(range.from)} – ${fmtDay(range.to)} · ${s.days_approved} days approved`} right={<Button kind="primary" disabled={busy} onClick={pdf}><Icon.Download size={14} /> {busy ? 'Building PDF…' : 'Export PDF with photos'}</Button>} />
+      <TopBar title="Reports" sub={`${fmtDay(range.from)} – ${fmtDay(range.to)} · ${s.days_approved} days approved`} right={<><Button disabled={busy} onClick={statement} data-testid="statement-pdf"><Icon.Download size={14} /> Month-end statement</Button><Button kind="primary" disabled={busy} onClick={pdf}><Icon.Download size={14} /> {busy ? 'Building PDF…' : 'Export PDF with photos'}</Button></>} />
       <div className="content">
         {picker}
         <div className="grid grid-5">
@@ -224,7 +256,8 @@ export function SettingsPage() {
   const isOwner = useIsOwner();
   const toast = useStore((s) => s.toast);
   const refreshKey = useStore((s) => s.refreshKey);
-  const [tab, setTab] = useState<'users' | 'accounts' | 'distributors' | 'audit' | 'days'>('users');
+  const [tab, setTab] = useState<'users' | 'accounts' | 'budgets' | 'alerts' | 'distributors' | 'audit' | 'days'>('users');
+  const isViewer = useIsViewer();
   const [profiles, setProfiles] = useState<api.Profile[]>([]);
   const [devices, setDevices] = useState<{ id: string; user_id: string; label: string; platform: string | null; last_seen: string }[]>([]);
   const [audit, setAudit] = useState<api.AuditRow[]>([]);
@@ -232,7 +265,7 @@ export function SettingsPage() {
   const [accounts, setAccounts] = useState<api.Account[]>([]);
   const [dists, setDists] = useState<api.Distributor[]>([]);
   const [addUser, setAddUser] = useState(false);
-  const [nu, setNu] = useState({ name: '', phone: '', pin: '', role: 'cashier' as 'cashier' | 'manager' | 'owner' });
+  const [nu, setNu] = useState({ name: '', phone: '', pin: '', role: 'cashier' as 'cashier' | 'manager' | 'owner' | 'viewer' });
   const { range, picker } = useRange('month');
   const [addAcc, setAddAcc] = useState(false);
   const [na, setNa] = useState({ name: '', kind: 'wallet' as api.AccountKind, provider: '' });
@@ -241,8 +274,8 @@ export function SettingsPage() {
   const [newPin, setNewPin] = useState('');
   const [ns, setNs] = useState({ name: '', phone: '' });
   const [busy, setBusy] = useState(false);
-  useEffect(() => { if (!isOwner) return; Promise.all([api.listProfiles(), api.listDevices(), api.auditLog(range.from, range.to), api.listDays(range.from, range.to), api.listAllAccounts(), api.listDistributors()]).then(([p, d, a, bd, ac, ds]) => { setProfiles(p); setDevices(d); setAudit(a); setDays(bd); setAccounts(ac); setDists(ds); }).catch((e) => toast((e as Error).message, 'danger')); }, [isOwner, refreshKey, toast, range.from, range.to]);
-  if (!isOwner) return <><TopBar title="Settings" /><div className="content"><Notice kind="warn">Owner only</Notice></div></>;
+  useEffect(() => { if (!isOwner && !isViewer) return; Promise.all([api.listProfiles(), api.listDevices(), api.auditLog(range.from, range.to), api.listDays(range.from, range.to), api.listAllAccounts(), api.listDistributors()]).then(([p, d, a, bd, ac, ds]) => { setProfiles(p); setDevices(d); setAudit(a); setDays(bd); setAccounts(ac); setDists(ds); }).catch((e) => toast((e as Error).message, 'danger')); }, [isOwner, isViewer, refreshKey, toast, range.from, range.to]);
+  if (!isOwner && !isViewer) return <><TopBar title="Settings" /><div className="content"><Notice kind="warn">Owner only</Notice></div></>;
   const create = async () => {
     if (!nu.name.trim() || !isValidPhone(nu.phone) || !isValidPin(nu.pin)) return toast('Name, a valid phone and a 6-digit PIN are needed', 'danger');
     setBusy(true);
@@ -269,11 +302,11 @@ export function SettingsPage() {
   const who = (id: string | null) => profiles.find((p) => p.id === id)?.name ?? '—';
   return (
     <>
-      <TopBar title="Settings" sub="Owner only · users, accounts, rules, and the audit log" right={<Chips options={[{ value: 'users', label: 'Users' }, { value: 'accounts', label: 'Accounts & wallets' }, { value: 'distributors', label: 'Distributors' }, { value: 'days', label: 'Locked days' }, { value: 'audit', label: 'Audit log' }]} value={tab} onChange={setTab} />} />
+      <TopBar title="Settings" sub="Owner only · users, accounts, rules, and the audit log" right={<Chips options={[{ value: 'users', label: 'Users' }, { value: 'accounts', label: 'Accounts & wallets' }, { value: 'budgets', label: 'Expense budgets' }, { value: 'alerts', label: 'Alerts' }, { value: 'distributors', label: 'Distributors' }, { value: 'days', label: 'Locked days' }, { value: 'audit', label: 'Audit log' }]} value={tab} onChange={setTab} />} />
       <div className="content">
         {tab === 'users' && <div className="grid grid-2 stack">
-          <Card title="Users & staff" right={<><Button size="sm" onClick={() => setAddStaff(true)} data-testid="add-staff">+ Staff (no login)</Button><Button kind="primary" size="sm" onClick={() => setAddUser(true)}>+ Add login</Button></>}>
-            <div className="scroll-x"><table className="table"><thead><tr><th>Name</th><th>Role</th><th>Phone</th><th>Devices</th><th></th></tr></thead><tbody>{profiles.map((p) => <tr key={p.id} style={{ opacity: p.active ? 1 : 0.5 }}><td><b>{p.name}</b></td><td><Pill kind={p.role === 'owner' ? 'accent' : p.role === 'manager' ? 'warn' : 'neutral'}>{p.role === 'staff' ? 'staff · no login' : p.role}</Pill></td><td className="num">{p.phone ?? '—'}</td><td className="muted">{p.has_login === false ? 'account only — cannot sign in' : devices.filter((d) => d.user_id === p.id).map((d) => `${d.label} · ${fmtDateTime(d.last_seen)}`).join(', ') || '—'}</td><td><span style={{ display: 'flex', gap: 4 }}>{p.has_login !== false && p.id !== profileId && <Button size="sm" onClick={() => { setResetFor(p); setNewPin(''); }} data-testid={`reset-pin-${p.phone}`}>Reset PIN</Button>}{p.role !== 'owner' && <Button size="sm" onClick={() => toggleActive(p)}>{p.active ? 'Disable' : 'Enable'}</Button>}</span></td></tr>)}</tbody></table></div>
+          <Card title="Users & staff" right={isOwner && <><Button size="sm" onClick={() => setAddStaff(true)} data-testid="add-staff">+ Staff (no login)</Button><Button kind="primary" size="sm" onClick={() => setAddUser(true)}>+ Add login</Button></>}>
+            <div className="scroll-x"><table className="table"><thead><tr><th>Name</th><th>Role</th><th>Phone</th><th>Devices</th><th></th></tr></thead><tbody>{profiles.map((p) => <tr key={p.id} style={{ opacity: p.active ? 1 : 0.5 }}><td><b>{p.name}</b></td><td><Pill kind={p.role === 'owner' ? 'accent' : p.role === 'manager' ? 'warn' : 'neutral'}>{p.role === 'staff' ? 'staff · no login' : p.role === 'viewer' ? 'read-only' : p.role}</Pill></td><td className="num">{p.phone ?? '—'}</td><td className="muted">{p.has_login === false ? 'account only — cannot sign in' : devices.filter((d) => d.user_id === p.id).map((d) => `${d.label} · ${fmtDateTime(d.last_seen)}`).join(', ') || '—'}</td><td><span style={{ display: 'flex', gap: 4 }}>{isOwner && p.has_login !== false && p.id !== profileId && <Button size="sm" onClick={() => { setResetFor(p); setNewPin(''); }} data-testid={`reset-pin-${p.phone}`}>Reset PIN</Button>}{isOwner && p.role !== 'owner' && <Button size="sm" onClick={() => toggleActive(p)}>{p.active ? 'Disable' : 'Enable'}</Button>}</span></td></tr>)}</tbody></table></div>
             <div className="help">Staff without a login (helpers, salesmen) still get an account: their credit bills and advances are recorded against them, but they cannot open the app.</div>
             <div className="help">Forgot PIN? Reset it here — the change is logged in the audit log. Your own PIN: More → Change my PIN.</div>
           </Card>
@@ -283,7 +316,9 @@ export function SettingsPage() {
             </tbody></table></div>
           </Card>
         </div>}
-        {tab === 'accounts' && <Card title="Accounts & wallets" right={<Button kind="primary" size="sm" onClick={() => setAddAcc(true)} data-testid="add-account">+ Add account</Button>}>{accounts.map((a) => <div className="row" key={a.id}><div className="grow"><span className="t">{a.name}</span><span className="s">{a.kind.replace('_', ' ')}{a.provider ? ` · ${a.provider}` : ''}</span></div>{!['cash_drawer', 'owner_personal', 'waw_fs'].includes(a.kind) && <Button size="sm" onClick={() => toggleAccount(a)}>{a.active ? 'Disable' : 'Enable'}</Button>}</div>)}<div className="help">Disabled accounts keep their history but no longer appear in forms. Only the owner can add or disable accounts.</div></Card>}
+        {tab === 'budgets' && <BudgetsCard editable={isOwner} />}
+        {tab === 'alerts' && <AlertsSettings />}
+        {tab === 'accounts' && <Card title="Accounts & wallets" right={isOwner && <Button kind="primary" size="sm" onClick={() => setAddAcc(true)} data-testid="add-account">+ Add account</Button>}>{accounts.map((a) => <div className="row" key={a.id}><div className="grow"><span className="t">{a.name}</span><span className="s">{a.kind.replace('_', ' ')}{a.provider ? ` · ${a.provider}` : ''}</span></div>{isOwner && !['cash_drawer', 'owner_personal', 'waw_fs', 'adjustment'].includes(a.kind) && <Button size="sm" onClick={() => toggleAccount(a)}>{a.active ? 'Disable' : 'Enable'}</Button>}</div>)}<div className="help">Disabled accounts keep their history but no longer appear in forms. Only the owner can add or disable accounts.</div></Card>}
         {tab === 'distributors' && <Card title="Distributors">{dists.map((d) => <div className="row" key={d.id}><div className="grow"><span className="t">{d.name}</span><span className="s">{[d.rep_name, d.phone, d.delivery_days].filter(Boolean).join(' · ') || 'no details'}{d.opening_balance > 0 ? ` · opening balance ${num(d.opening_balance)}` : ''}</span></div><Link className="btn sm" to={`/distributors/${d.id}`}>Open</Link></div>)}</Card>}
         {tab === 'days' && <Card title={`Days · ${days.length}`} right={picker}>{days.length === 0 && <div className="muted">No days in this range</div>}{days.map((d) => <div className="row" key={d.day}><div className="grow"><span className="t">{fmtDay(d.day)}</span><span className="s">opening {num(d.opening_cash)}{d.closed_at ? ` · closed by ${who(d.closed_by)}` : ''}{d.approved_at ? ` · approved by ${who(d.approved_by)} ${fmtDateTime(d.approved_at)}` : ''}</span></div>{d.status === 'approved' ? <Pill kind="ok"><Icon.Lock size={12} /> Locked</Pill> : d.status === 'closed' ? <Pill kind="warn">Awaiting approval</Pill> : <Pill kind="neutral">Open</Pill>}<Link className="btn sm" to={`/closing?day=${d.day}`}>Open</Link></div>)}</Card>}
         {tab === 'audit' && <Card title={`Audit log · everything that happened · ${audit.length}`} right={picker}><div className="scroll-x"><table className="table"><thead><tr><th>When</th><th>Who</th><th>What</th><th>Reason</th><th>Device</th></tr></thead><tbody>{audit.map((a) => <tr key={a.id}><td className="num" style={{ whiteSpace: 'nowrap' }}>{fmtDateTime(a.at)}</td><td>{who(a.user_id)}</td><td><b className={a.action === 'blocked' ? 'danger' : a.action === 'update' || a.action === 'delete' || a.action === 'unlock' ? 'warn' : ''}>{a.action}</b> {a.table_name}{a.action === 'update' && a.before && a.after ? <span className="muted"> · {diffSummary(a.before as Record<string, unknown>, a.after as Record<string, unknown>)}</span> : a.action === 'blocked' ? <span className="muted"> · {(a.after as { invoice_no?: string; attempted?: number })?.invoice_no} attempted {num((a.after as { attempted?: number })?.attempted ?? 0)}</span> : a.action === 'insert' ? <span className="muted"> · {num(Number((a.after as { amount?: number })?.amount ?? (a.after as { pos_total?: number })?.pos_total ?? (a.after as { counted_cash?: number })?.counted_cash ?? 0))}</span> : ''}</td><td>{a.reason}</td><td className="muted">{a.device}</td></tr>)}</tbody></table></div></Card>}
@@ -309,7 +344,7 @@ export function SettingsPage() {
         <Field label="Name"><input className="input" value={nu.name} onChange={(e) => setNu({ ...nu, name: e.target.value })} /></Field>
         <Field label="Phone number (their login)"><input className="input" inputMode="tel" value={nu.phone} onChange={(e) => setNu({ ...nu, phone: e.target.value })} placeholder="03001234567" /></Field>
         <Field label="PIN (6 digits)"><input className="input num" inputMode="numeric" maxLength={6} value={nu.pin} onChange={(e) => setNu({ ...nu, pin: e.target.value.replace(/\D/g, '') })} /></Field>
-        <Field label="Role"><Chips options={[{ value: 'cashier', label: 'Cashier' }, { value: 'manager', label: 'Manager' }, { value: 'owner', label: 'Owner' }]} value={nu.role} onChange={(v) => setNu({ ...nu, role: v })} /></Field>
+        <Field label="Role"><Chips options={[{ value: 'cashier', label: 'Cashier' }, { value: 'manager', label: 'Manager' }, { value: 'owner', label: 'Owner' }, { value: 'viewer', label: 'Read-only (partner / accountant)' }]} value={nu.role} onChange={(v) => setNu({ ...nu, role: v })} /></Field>
         <Button kind="primary" size="big" disabled={busy} onClick={create}>Create login</Button>
       </Sheet>}
     </>
@@ -325,7 +360,7 @@ export function NotificationsPage() {
   const notifications = useStore((s) => s.notifications);
   const load = useStore((s) => s.loadNotifications);
   const [tab, setTab] = useState<'all' | 'alerts' | 'reminders' | 'approvals'>('all');
-  const kinds: Record<typeof tab, string[] | null> = { all: null, alerts: ['closing_minus', 'duplicate_blocked', 'waw_outstanding', 'unposted_invoice'], reminders: ['payment_reminder'], approvals: ['closing_submitted', 'owner_paid_request', 'day_approved'] };
+  const kinds: Record<typeof tab, string[] | null> = { all: null, alerts: ['closing_minus', 'duplicate_blocked', 'waw_outstanding', 'unposted_invoice', 'general'], reminders: ['payment_reminder'], approvals: ['closing_submitted', 'owner_paid_request', 'day_approved'] };
   const list = notifications.filter((n) => !kinds[tab] || kinds[tab]!.includes(n.kind));
   const link = (n: api.Notification) => n.ref_table === 'closings' ? '/closing' : n.ref_table === 'invoices' ? (n.kind === 'unposted_invoice' ? '/purchases?tab=unposted' : '/purchases') : n.ref_table === 'waw_loans' ? '/waw' : n.ref_table === 'payments' ? '/waw' : n.ref_table === 'reminders' ? '/purchases?tab=unpaid' : '/';
   const markAll = async () => { const ids = notifications.filter((n) => !n.read_at).map((n) => n.id); if (ids.length) { await api.markRead(ids); await load(); } };

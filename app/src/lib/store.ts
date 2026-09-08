@@ -53,4 +53,7 @@ export const useStore = create<State>((set, get) => ({
 
 export const useProfile = () => useStore((s) => s.profile);
 export const useIsOwner = () => useStore((s) => s.profile?.role === 'owner');
+export const useIsViewer = () => useStore((s) => s.profile?.role === 'viewer');
+export const useCanWrite = () => useStore((s) => s.profile?.role === 'owner' || s.profile?.role === 'manager' || s.profile?.role === 'cashier');
+export const useCanSeeOwner = () => useStore((s) => s.profile?.role === 'owner' || s.profile?.role === 'viewer');
 export const useIsManagerOrOwner = () => useStore((s) => s.profile?.role === 'owner' || s.profile?.role === 'manager');

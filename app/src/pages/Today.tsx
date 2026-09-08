@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { TopBar, LiveBadge } from '../components/Shell';
 import { KPI, Card, Money, Pill, Icon, Spinner, Empty } from '../components/ui';
-import { useStore, useIsOwner } from '../lib/store';
+import { useStore, useIsOwner, useCanWrite } from '../lib/store';
 import * as api from '../lib/api';
 import { today, fmtDay, fmtTime, num } from '../lib/format';
 
@@ -13,6 +13,7 @@ export default function Today() {
   const accounts = useStore((s) => s.accounts);
   const refreshKey = useStore((s) => s.refreshKey);
   const isOwner = useIsOwner();
+  const canWrite = useCanWrite();
   const day = today();
   const [data, setData] = useState<{ book: api.CashBook; sale: api.DailySale | null; closing: api.Closing | null; bday: api.BusinessDay | null; pending: number; unposted: number; waw: number; entries: Entry[]; nonCashSoFar: number; receiptCount: number; creditSoFar: number; creditCount: number } | null>(null);
   useEffect(() => {
@@ -48,24 +49,24 @@ export default function Today() {
       <TopBar title="Today" sub={fmtDay(day)} right={<>
         <LiveBadge />
         {status === 'approved' ? <Pill kind="ok"><Icon.Lock size={12} /> Day approved</Pill> : status === 'closed' ? <Pill kind="warn">Closed · awaiting approval</Pill> : <Pill kind="neutral">Day open</Pill>}
-        <span className="desktop-only actions">
+        {canWrite && <span className="desktop-only actions">
           <Link className="btn primary" to="/receipts/new" data-testid="add-receipt">+ Card / online</Link>
           <Link className="btn" to="/credit/new" data-testid="add-credit-bill">+ Credit bill</Link>
           <Link className="btn" to="/pay">+ Payment</Link>
           <Link className="btn" to="/expenses/new">+ Expense</Link>
           <Link className="btn" to="/purchases/new">+ Purchase</Link>
           {profile.role !== 'cashier' && <Link className="btn" to="/sales/new">{sale ? 'Sale' : '+ Sale (night)'}</Link>}
-        </span>
+        </span>}
       </>} />
       <div className="content">
-        <div className="phone-only grid grid-2">
+        {canWrite && <div className="phone-only grid grid-2">
           <Link className="btn primary" to="/receipts/new" data-testid="add-receipt-m">+ Card / online</Link>
           <Link className="btn" to="/credit/new" data-testid="add-credit-bill-m">+ Credit bill</Link>
           <Link className="btn" to="/pay">+ Payment</Link>
           <Link className="btn" to="/expenses/new">+ Expense</Link>
           <Link className="btn" to="/purchases/new">+ Purchase</Link>
           {profile.role !== 'cashier' && <Link className="btn" to="/sales/new">{sale ? 'Sale' : '+ Sale (night)'}</Link>}
-        </div>
+        </div>}
         <div className="grid grid-4">
           <KPI label={sale ? 'POS system sale' : 'Card / online so far'} value={sale ? <Money v={sale.pos_total} /> : <Money v={data.nonCashSoFar} />} hint={sale ? `Cash ${num(posCash)} · Card/online ${num(sale.pos_total - sale.credit_total - (posCash ?? 0))} · Credit ${num(sale.credit_total)}` : `${data.receiptCount} receipt${data.receiptCount === 1 ? '' : 's'} · credit ${num(data.creditSoFar)} (${data.creditCount}) · sale not recorded yet`} />
           <KPI label={closing ? 'Cash counted in drawer' : 'Drawer should hold'} value={<Money v={closing ? closing.counted_cash : book.expected_cash} />} hint={closing ? `Expected ${num(closing.expected_cash)}` : `Opening ${num(book.opening_cash)} + sale cash − payouts`} kind={closing ? undefined : 'accent'} />

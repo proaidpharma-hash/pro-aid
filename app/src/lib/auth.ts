@@ -49,7 +49,7 @@ export async function signOut() {
 }
 
 // owner creates a staff login: auth user first (via the session-less client), then the profile row
-export async function createStaffLogin(input: { name: string; phone: string; pin: string; role: 'owner' | 'manager' | 'cashier' }) {
+export async function createStaffLogin(input: { name: string; phone: string; pin: string; role: 'owner' | 'manager' | 'cashier' | 'viewer' }) {
   const { data, error } = await adminSignupClient.auth.signUp({ email: emailForPhone(input.phone), password: await pinToPassword(input.phone, input.pin) });
   if (error) throw new Error(/already registered/i.test(error.message) ? 'A login with this phone number already exists' : error.message);
   const id = data.user?.id;

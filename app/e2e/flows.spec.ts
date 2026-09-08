@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { signIn, signOut, attachPhoto, toastSeen, selectByText, countNotes, vis, expectSignedInAs } from './helpers';
+import { signIn, signOut, attachPhoto, toastSeen, selectByText, countNotes, vis, expectSignedInAs, jpegFixture } from './helpers';
 
 // One full pharmacy day, in the order it happens, across the three roles.
 // Each step exercises a rule the owner asked for. Tests run in order against one database.
@@ -534,4 +534,96 @@ test('one invoice, several sources: owner account + WAW loan + cash, remainder w
   await toastSeen(page, 'Purchase saved and paid');
   await expect(page.locator('.content')).toContainText('Adjusted against difference');
   await expect(page.locator('.content')).not.toContainText('They owe us');
+});
+
+test('control pack: surprise count, bank reconciliation, budgets, scorecard, digest, viewer role, duplicate photo', async ({ page }) => {
+  await signOut(page);
+  await signIn(page, 'manager');
+  const d = new Date(); d.setDate(d.getDate() - 6); const day = d.toISOString().slice(0, 10);
+  // surprise count on a day with no sale yet: POS so far 20,000, drawer counts 19,500 → minus 500 (opening on that day is 0)
+  await page.goto(`/closing?day=${day}`);
+  await page.getByTestId('spot-count').click();
+  await page.fill('#spot-pos', '20000');
+  await attachPhoto(page, 0);
+  await expect(page.getByTestId('spot-expected')).toHaveText('20,000');
+  await countNotes(page, 19500);
+  await expect(page.getByTestId('spot-diff')).toContainText('MINUS');
+  await attachPhoto(page, 1);
+  await page.getByTestId('spot-save').click();
+  await toastSeen(page, 'MINUS 500');
+  await expect(page.locator('[data-testid="spot-row"]')).toContainText('POS 20,000 · expected 20,000 · counted 19,500');
+  // duplicate photo: the very same picture again is refused
+  await page.goto('/expenses/new');
+  await page.getByRole('radio', { name: 'Bike fuel' }).click();
+  await page.fill('#expense-amount', '100');
+  await page.locator('input[type="date"]').fill(day);
+  const same = Buffer.concat([jpegFixture(), Buffer.from('twice')]);
+  await page.getByTestId('photo-gallery').first().setInputFiles({ name: 'p.jpg', mimeType: 'image/jpeg', buffer: same });
+  await expect(page.getByTestId('photo-picker').first()).toContainText('attached', { timeout: 15000 });
+  await page.locator('[data-testid="save-expense"]').click();
+  await toastSeen(page, 'Expense saved');
+  await page.goto('/expenses/new');
+  await page.getByRole('radio', { name: 'Bike fuel' }).click();
+  await page.fill('#expense-amount', '100');
+  await page.locator('input[type="date"]').fill(day);
+  await page.getByTestId('photo-gallery').first().setInputFiles({ name: 'p.jpg', mimeType: 'image/jpeg', buffer: same });
+  await expect(page.getByTestId('photo-picker').first()).toContainText('already used', { timeout: 15000 });
+
+  // owner: budgets, bank settlement, scorecard, digest, alerts settings, viewer login
+  await signOut(page);
+  await signIn(page, 'owner');
+  await page.goto('/settings');
+  await page.getByRole('radio', { name: 'Expense budgets' }).click();
+  const firstBudgetRow = page.locator('[data-testid="budget-row"]').first();
+  const catName = (await firstBudgetRow.locator('td').first().innerText()).trim();
+  await page.getByTestId(`budget-edit-${catName}`).click();
+  await page.getByTestId(`budget-input-${catName}`).fill('1000');
+  await page.getByTestId(`budget-save-${catName}`).click();
+  await toastSeen(page, 'Budget saved');
+  await expect(firstBudgetRow).toContainText('1,000');
+  await page.getByRole('radio', { name: 'Alerts' }).click();
+  await page.getByTestId('tg-token').fill('123:abc');
+  await page.getByTestId('tg-chat').fill('42');
+  await page.getByTestId('tg-save').click();
+  await toastSeen(page, 'Alert settings saved');
+  // reconciliation: the HBL machine took 3,200 on the sale day (two receipts); the bank paid in 3,150
+  await page.goto('/noncash');
+  await page.getByRole('radio', { name: 'This month' }).click();
+  await expect(page.locator('[data-testid="recon-row"]').first()).toBeVisible();
+  await page.getByTestId('add-settlement').click();
+  await page.getByTestId('settle-day').fill(new Date().toISOString().slice(0, 10));
+  await page.fill('#settle-amount', '3150');
+  await attachPhoto(page);
+  await page.getByTestId('settle-save').click();
+  await toastSeen(page, 'Settlement recorded');
+  await expect(page.locator('[data-testid="recon-row"]', { hasText: 'HBL card machine' }).first()).toContainText('− 50');
+  await page.goto('/insights');
+  await expect(page.locator('[data-testid="score-row"]', { hasText: 'Bilal Hussain' })).toBeVisible();
+  await expect(page.getByTestId('digest')).toContainText('Pro Aid ·');
+  await page.goto('/notifications');
+  await expect(page.locator('.content')).toContainText('MINUS at surprise count');
+  await expect(page.locator('.content')).toContainText('Card settlement short · HBL');
+  // read-only viewer
+  await page.goto('/settings');
+  await page.getByRole('button', { name: '+ Add login' }).click();
+  await page.locator('.sheet input').nth(0).fill('Accountant Ali');
+  await page.locator('.sheet input').nth(1).fill('03009998877');
+  await page.locator('.sheet input').nth(2).fill('121212');
+  await page.getByRole('radio', { name: /Read-only/ }).click();
+  await page.locator('.sheet button:has-text("Create login")').click();
+  await toastSeen(page, 'can now sign in');
+  await signOut(page);
+  await page.fill('input[inputmode="tel"]', '03009998877');
+  await page.fill('input[type="password"]', '121212');
+  await page.click('button:has-text("Sign in")');
+  await page.waitForURL(/\/$/);
+  await expect(page.getByTestId('viewer-banner')).toContainText('Read-only');
+  await expect(page.locator('[data-testid="add-receipt"], [data-testid="add-receipt-m"]')).toHaveCount(0);
+  await page.goto('/insights');
+  await expect(page.locator('.content')).toContainText('Total sale');
+  await page.goto('/settings');
+  await expect(page.locator('table').first()).toContainText('Accountant Ali');
+  await expect(page.getByRole('button', { name: '+ Add login' })).toHaveCount(0);
+  await page.goto('/expenses/new');
+  await expect(page).toHaveURL(/\/$/);   // write pages bounce a viewer home
 });

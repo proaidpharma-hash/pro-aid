@@ -1,7 +1,7 @@
 import { supabase } from './supabase';
 
 // ---- types (mirror the database) --------------------------------------------
-export type Role = 'owner' | 'manager' | 'cashier' | 'staff';
+export type Role = 'owner' | 'manager' | 'cashier' | 'staff' | 'viewer';
 export type Profile = { id: string; name: string; role: Role; phone: string | null; active: boolean; has_login: boolean; created_at: string };
 export type AccountKind = 'cash_drawer' | 'card_machine' | 'wallet' | 'bank' | 'owner_personal' | 'waw_fs' | 'adjustment';
 export type Account = { id: string; name: string; kind: AccountKind; provider: string | null; active: boolean; sort_order: number };
@@ -9,7 +9,12 @@ export type Distributor = { id: string; name: string; rep_name: string | null; p
 export type DistributorBalance = { id: string; name: string; pending: number; open_invoices: number; oldest_open: string | null; diff_pending: number };
 export type Customer = { id: string; name: string; phone: string | null; note: string | null; active: boolean };
 export type CustomerBalance = { id: string; name: string; phone: string | null; owed: number; since: string | null };
-export type ExpenseCategory = { id: string; name: string; active: boolean; sort_order: number };
+export type ExpenseCategory = { id: string; name: string; active: boolean; sort_order: number; monthly_budget: number | null };
+export type BudgetStatus = { category_id: string; name: string; budget: number | null; spent: number; remaining: number | null; over: boolean };
+export type SpotCount = { id: string; day: string; pos_so_far: number; pos_photo_id: string; expected_cash: number; counted_cash: number; difference: number; denominations: Record<string, number> | null; drawer_photo_id: string; note: string | null; counted_by: string; device: string | null; created_at: string };
+export type BankSettlement = { id: string; account_id: string; day: string; amount: number; note: string | null; photo_id: string; entered_by: string; created_at: string };
+export type CardRecon = { day: string; account_id: string; account_name: string; machine: number; settled: number | null; difference: number | null; settlement_id: string | null; note: string | null };
+export type Scorecard = { user_id: string; name: string; role: string; days_closed: number; avg_difference: number | null; minus_days: number; late_closings: number; entries: number; owner_corrections: number; blocked_attempts: number };
 export type BusinessDay = { day: string; opening_cash: number; status: 'open' | 'closed' | 'approved'; closed_by: string | null; closed_at: string | null; approved_by: string | null; approved_at: string | null };
 export type DailySale = { id: string; day: string; pos_total: number; credit_total: number; photo_id: string; pos_source: 'pos' | 'count'; counted_cash: number | null; denominations: Record<string, number> | null; entered_by: string; device: string | null; created_at: string };
 export type SaleReceipt = { id: string; day: string; account_id: string; amount: number; note: string | null; photo_id: string; entered_by: string; device: string | null; created_at: string };
@@ -58,6 +63,8 @@ function friendly(m: string) {
   if (/JSON object requested/.test(m)) return 'Not found';
   if (/duplicate key.*invoices_distributor_id_invoice_no/.test(m)) return 'This invoice number already exists for this distributor';
   if (/duplicate key.*customer_credit_bills/.test(m)) return 'This bill number already exists for this customer';
+  if (/photos_sha256_unique/.test(m)) return 'This exact photo was already used as proof for another entry — take a fresh photo';
+  if (/bank_settlements_account_id_day_key/.test(m)) return 'A settlement for this machine and day is already recorded';
   if (/row-level security/.test(m)) return 'You are not allowed to do that';
   return m;
 }
@@ -78,6 +85,8 @@ export const updateDistributor = async (id: string, d: Partial<Distributor>) => 
 export const listCustomers = async () => must(await supabase.from('customers').select('*').eq('active', true).order('name')) as Customer[];
 export const customerBalances = async () => (must(await supabase.from('v_customer_balance').select('*').order('owed', { ascending: false })) as CustomerBalance[]).map((c) => numify(c, ['owed']));
 export const addCustomer = async (c: Partial<Customer>) => must(await supabase.from('customers').insert(c).select('*').single()) as Customer;
+export const expenseBudgetStatus = async (month?: string) => { const r = must(await supabase.rpc('expense_budget_status', month ? { p_month: month } : {})) as BudgetStatus[] | BudgetStatus; return (Array.isArray(r) ? r : r ? [r] : []).map((x) => ({ ...x, budget: x.budget === null ? null : n(x.budget), spent: n(x.spent), remaining: x.remaining === null ? null : n(x.remaining) })); };
+export const setExpenseBudget = async (categoryId: string, budget: number | null) => must(await supabase.rpc('set_expense_budget', { p_category: categoryId, p_budget: budget }));
 export const listCategories = async () => must(await supabase.from('expense_categories').select('*').eq('active', true).order('sort_order')) as ExpenseCategory[];
 export const listProfiles = async () => must(await supabase.from('profiles').select('*').order('role').order('name')) as Profile[];
 export const upsertProfile = async (p: { id: string; name: string; role: Role; phone: string; active: boolean }) => must(await supabase.rpc('upsert_profile', { p_id: p.id, p_name: p.name, p_role: p.role, p_phone: p.phone, p_active: p.active })) as Profile;
@@ -111,6 +120,16 @@ export const getClosing = async (day: string) => { const c = (await supabase.fro
 export const submitClosing = async (day: string, counted: number, photoId: string, note?: string, denominations?: Record<string, number> | null) => numify(must(await supabase.rpc('submit_closing', { p_day: day, p_counted: counted, p_drawer_photo: photoId, p_note: note ?? null, p_denominations: denominations ?? null })) as Closing, ['expected_cash', 'counted_cash', 'difference']);
 export const approveDay = async (day: string) => must(await supabase.rpc('approve_day', { p_day: day }));
 export const unlockDay = async (day: string, reason: string) => must(await supabase.rpc('unlock_day', { p_day: day, p_reason: reason }));
+export const expectedCashNow = async (day: string, posSoFar: number) => n(must(await supabase.rpc('expected_cash_now', { p_day: day, p_pos_so_far: posSoFar })));
+export const spotCount = async (x: { day: string; pos_so_far: number; pos_photo_id: string; counted: number; denominations: Record<string, number> | null; drawer_photo_id: string; note?: string | null }) => numify(must(await supabase.rpc('spot_count', { p_day: x.day, p_pos_so_far: x.pos_so_far, p_pos_photo: x.pos_photo_id, p_counted: x.counted, p_denominations: x.denominations, p_drawer_photo: x.drawer_photo_id, p_note: x.note ?? null })) as SpotCount, ['pos_so_far', 'expected_cash', 'counted_cash', 'difference']);
+export const listSpotCounts = async (from: string, to: string) => (must(await supabase.from('spot_counts').select('*').gte('day', from).lte('day', to).order('created_at', { ascending: false })) as SpotCount[]).map((c) => numify(c, ['pos_so_far', 'expected_cash', 'counted_cash', 'difference']));
+export const cardReconciliation = async (from: string, to: string) => { const r = must(await supabase.rpc('card_reconciliation', { p_from: from, p_to: to })) as CardRecon[] | CardRecon | null; const rows = r === null ? [] : Array.isArray(r) ? r : [r]; return rows.map((x) => ({ ...x, machine: n(x.machine), settled: x.settled === null ? null : n(x.settled), difference: x.difference === null ? null : n(x.difference) })); };
+export const addBankSettlement = async (x: { account_id: string; day: string; amount: number; note?: string | null; photo_id: string }) => must(await supabase.from('bank_settlements').insert(x).select('*').single()) as BankSettlement;
+export const staffScorecard = async (from: string, to: string) => { const r = must(await supabase.rpc('staff_scorecard', { p_from: from, p_to: to })) as Scorecard[] | Scorecard | null; const rows = r === null ? [] : Array.isArray(r) ? r : [r]; return rows.map((x) => ({ ...x, avg_difference: x.avg_difference === null ? null : n(x.avg_difference), days_closed: Number(x.days_closed), minus_days: Number(x.minus_days), late_closings: Number(x.late_closings), entries: Number(x.entries), owner_corrections: Number(x.owner_corrections), blocked_attempts: Number(x.blocked_attempts) })); };
+export const dailyDigest = async (day: string) => must(await supabase.rpc('daily_digest', { p_day: day })) as string;
+export const getSettings = async () => Object.fromEntries((must(await supabase.from('app_settings').select('key, value')) as { key: string; value: string | null }[]).map((r) => [r.key, r.value ?? '']));
+export const setSetting = async (key: string, value: string) => must(await supabase.rpc('set_setting', { p_key: key, p_value: value }));
+export const sendTelegramTest = async (text: string) => must(await supabase.rpc('send_telegram', { p_text: text })) as boolean;
 export const listClosings = async (from: string, to: string) => (must(await supabase.from('closings').select('*').gte('day', from).lte('day', to).order('day', { ascending: false })) as Closing[]).map((c) => numify(c, ['expected_cash', 'counted_cash', 'difference']));
 
 // ---- invoices & payments ----------------------------------------------------

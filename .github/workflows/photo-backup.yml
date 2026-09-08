@@ -1,0 +1,45 @@
+name: Monthly encrypted backup of the proof photos
+on:
+  schedule:
+    - cron: '0 23 1 * *'    # the 1st of every month at 04:00 Pakistan time → backs up the previous month
+  workflow_dispatch:
+    inputs:
+      month:
+        description: 'Month to back up (YYYY-MM); empty = previous month'
+        required: false
+        default: ''
+permissions:
+  contents: read
+jobs:
+  photos:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Download, pack and encrypt (needs SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY and BACKUP_PASSPHRASE secrets)
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          PASS: ${{ secrets.BACKUP_PASSPHRASE }}
+          MONTH_IN: ${{ github.event.inputs.month }}
+        run: |
+          fail() { echo "::error title=Photo backup failed::$1"; exit 1; }
+          if [ -z "$SUPABASE_URL" ] || [ -z "$SUPABASE_SERVICE_ROLE_KEY" ] || [ -z "$PASS" ]; then echo "::warning title=Photo backup skipped::set SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY and BACKUP_PASSPHRASE secrets"; exit 0; fi
+          month="${MONTH_IN:-$(date -u -d "$(date -u +%Y-%m-01) -1 day" +%Y-%m)}"
+          echo "backing up $month"
+          mkdir -p photos
+          if ! out=$(node tools/photo-backup.mjs "$month" photos 2>&1); then fail "${out:0:400}"; fi
+          echo "$out"
+          name="proaid-photos-$month.tar.gz.enc"
+          tar -czf - -C photos . | openssl enc -aes-256-cbc -pbkdf2 -iter 200000 -salt -pass env:PASS -out "$name" || fail "encrypt"
+          ls -la "$name"
+          echo "BACKUP_NAME=$name" >> "$GITHUB_ENV"
+          echo "::notice title=Photo backup::$name — $out"
+      - uses: actions/upload-artifact@v4
+        if: env.BACKUP_NAME != ''
+        with:
+          name: ${{ env.BACKUP_NAME }}
+          path: ${{ env.BACKUP_NAME }}
+          retention-days: 90

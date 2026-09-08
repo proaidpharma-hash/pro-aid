@@ -6,6 +6,7 @@ import { useStore, useIsOwner } from '../lib/store';
 import * as api from '../lib/api';
 import { today, fmtDay, num, fmtShort, fmtTime } from '../lib/format';
 import type { ProofPhoto } from '../lib/photos';
+import { exportDayPdf } from '../lib/daypdf';
 
 // Record the daily sale. Two ways in:
 //  · POS total: type the POS figure (photo required); cash is worked out after card / online / credit.
@@ -211,6 +212,7 @@ export function SalesPage() {
       <TopBar title={`Daily sale · ${fmtDay(day, 'EEEE d MMMM')}`} sub={sale ? `Recorded · ${data.bday?.status === 'approved' ? 'approved & locked' : data.bday?.status === 'closed' ? 'closed, awaiting approval' : 'day open'}` : 'Not recorded yet'} right={<>
         <Button onClick={() => shift(-1)}>← {fmtShort(new Date(new Date(day).getTime() - 86400000))}</Button>
         {day < today() && <Button onClick={() => shift(1)}>{fmtShort(new Date(new Date(day).getTime() + 86400000))} →</Button>}
+        {sale && <Button onClick={() => exportDayPdf(day).catch((e: Error) => useStore.getState().toast(e.message, 'danger'))}><Icon.Download size={14} /> Day PDF</Button>}
         {!sale && <Link className="btn primary" to={`/sales/new?day=${day}`}>Record sale</Link>}
         {sale && isOwner && data.bday?.status === 'closed' && <Link className="btn primary" to={`/closing?day=${day}`}>Approve & lock day</Link>}
       </>} />

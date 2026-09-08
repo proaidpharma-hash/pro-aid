@@ -95,11 +95,12 @@ button { cursor: pointer; }
 .card.outline { border: 1.5px solid var(--accent); }
 .card-title { font-size: 15px; font-weight: 800; display: flex; justify-content: space-between; align-items: center; gap: 8px; }
 .grid { display: grid; gap: 14px; }
+.grid > * { min-width: 0; }
 .grid-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .grid-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .grid-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 .grid-5 { grid-template-columns: repeat(5, minmax(0, 1fr)); }
-@media (max-width: 959px) { .grid-3, .grid-4, .grid-5 { grid-template-columns: repeat(2, minmax(0, 1fr)); } .grid-2.stack { grid-template-columns: 1fr; } }
+@media (max-width: 959px) { .grid-3, .grid-4, .grid-5 { grid-template-columns: repeat(2, minmax(0, 1fr)); } .grid-2.stack { grid-template-columns: minmax(0, 1fr); } }
 .kpi .label { font-size: 11px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; }
 .kpi .value { font-size: 26px; font-weight: 800; letter-spacing: -0.02em; }
 .kpi .hint { font-size: 12px; color: var(--muted); font-weight: 700; }
@@ -223,3 +224,9 @@ button { cursor: pointer; }
 .live { display: inline-flex; align-items: center; gap: 6px; padding: 6px 10px; border-radius: 999px; background: var(--ok-soft); color: var(--ok); font-size: 11px; font-weight: 700; }
 .live i { width: 7px; height: 7px; border-radius: 50%; background: #12b76a; }
 .live.off { background: var(--warn-soft); color: var(--warn); } .live.off i { background: var(--warn); }
+
+/* rows whose action buttons drop under the text on narrow screens */
+.row.wrap { flex-wrap: wrap; }
+.row.wrap .grow { min-width: 0; flex: 1 1 200px; }
+.row.wrap .acts { display: flex; gap: 4px; flex-wrap: wrap; }
+@media (max-width: 720px) { .row.wrap .acts { flex-basis: 100%; justify-content: flex-end; } }

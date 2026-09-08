@@ -9,6 +9,7 @@ import { today, num, fmtShort, fmtDay, fmtDateTime } from '../lib/format';
 import { createStaffLogin, isValidPhone, isValidPin, resetPin, changeOwnPin } from '../lib/auth';
 import { SettleSheet } from './Ledgers';
 import { exportReportPdf } from '../lib/pdf';
+import { alertsEnabled, enableAlerts } from '../lib/realtime';
 
 type RangeKey = 'today' | 'week' | '15' | 'month' | 'lastmonth' | 'year' | 'lastyear' | 'custom';
 export function useRange(initial: RangeKey = 'month') {
@@ -331,7 +332,7 @@ export function NotificationsPage() {
   const isAlert = (k: string) => ['closing_minus', 'duplicate_blocked'].includes(k);
   return (
     <>
-      <TopBar title="Notifications" sub={`${notifications.filter((n) => !n.read_at).length} unread`} right={<Button size="sm" onClick={markAll}>Mark all read</Button>} />
+      <TopBar title="Notifications" sub={`${notifications.filter((n) => !n.read_at).length} unread`} right={<><Button size="sm" onClick={markAll}>Mark all read</Button>{!alertsEnabled() && <Button size="sm" kind="primary" onClick={() => enableAlerts().then(() => useStore.getState().toast('Alerts on — this device will show new alerts while the app is open', 'ok'), (e: Error) => useStore.getState().toast(e.message, 'danger'))}>Alerts on this device</Button>}</>} />
       <div className="content">
         <Chips options={[{ value: 'all', label: 'All' }, { value: 'alerts', label: 'Alerts' }, { value: 'reminders', label: 'Reminders' }, { value: 'approvals', label: 'Approvals' }]} value={tab} onChange={setTab} />
         <Card>{list.length === 0 ? <Empty>Nothing here</Empty> : list.map((n) => <Link to={link(n)} className="row" key={n.id} style={{ color: 'inherit', alignItems: 'flex-start' }} onClick={() => { if (!n.read_at) api.markRead([n.id]).then(load); }}><div className={`avatar ${isAlert(n.kind) ? 'danger' : n.kind === 'waw_outstanding' || n.kind === 'unposted_invoice' ? 'warn' : ''}`}><Icon.Bell size={16} /></div><div className="grow"><span className="t" style={{ fontWeight: n.read_at ? 700 : 800 }}>{n.title}</span><span className="s">{n.body}</span></div><span className="s" style={{ whiteSpace: 'nowrap' }}>{fmtDateTime(n.created_at)}</span></Link>)}</Card>

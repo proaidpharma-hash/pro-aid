@@ -77,10 +77,10 @@ export function PostingCheck({ day, canPost, onChange }: { day: string; canPost:
       {unposted.map((i) => {
         const b: api.ClosingBlocker = { id: i.id, invoice_no: i.invoice_no, distributor_name: i.distributor_name, amount: i.amount, day: i.day, unposted_reason: i.unposted_reason, unposted_reason_day: i.unposted_reason_day };
         const ok = done(b);
-        return <div className="row" key={i.id} data-testid="posting-row">
+        return <div className="row wrap" key={i.id} data-testid="posting-row">
           <div className="grow"><span className="t">{i.distributor_name} · Inv {i.invoice_no}</span><span className="s">received {fmtShort(i.day)} · {num(i.amount)} · {i.remaining <= 0 ? 'paid' : `${num(i.remaining)} unpaid`}{ok && i.unposted_reason ? <> · <b className="warn">not posted: {i.unposted_reason}</b>{i.unposted_reason_by_name ? ` (${i.unposted_reason_by_name})` : ''}</> : i.unposted_reason ? <span className="muted"> · earlier: {i.unposted_reason}</span> : ''}</span></div>
           {ok ? <Pill kind="warn">Reason given</Pill> : <Pill kind="danger">Needs answer</Pill>}
-          <span style={{ display: 'flex', gap: 4 }}>
+          <span className="acts">
             {canPost && <Button size="sm" kind="primary" onClick={() => setPosting(b)} data-testid="posting-posted">Posted in POS…</Button>}
             <Button size="sm" onClick={() => setReasoning(b)} data-testid="posting-reason">{ok ? 'Change reason' : 'Not posted — reason'}</Button>
           </span>
@@ -89,7 +89,7 @@ export function PostingCheck({ day, canPost, onChange }: { day: string; canPost:
       {!canPost && <div className="help">Only a manager or the owner can mark an invoice as posted; you can give the reason.</div>}
     </Card>
     {diffs.length > 0 && <Card kind="warn" title={`Posted today with a difference · ${diffs.length}`}>
-      {diffs.map((i) => <div className="row" key={i.id}><div className="grow"><span className="t">{i.distributor_name} · Inv {i.invoice_no}</span><span className="s">invoice {num(i.amount)} · posted {num(i.posted_amount)} · <b className="danger">{num(i.post_diff)} short</b> · {i.post_diff_kind ? api.DIFF_KIND_LABEL[i.post_diff_kind] : ''}{i.post_diff_note ? ` · ${i.post_diff_note}` : ''}</span></div><Link className="btn sm" to={`/distributors/${i.distributor_id}`}>Distributor</Link></div>)}
+      {diffs.map((i) => <div className="row wrap" key={i.id}><div className="grow"><span className="t">{i.distributor_name} · Inv {i.invoice_no}</span><span className="s">invoice {num(i.amount)} · posted {num(i.posted_amount)} · <b className="danger">{num(i.post_diff)} short</b> · {i.post_diff_kind ? api.DIFF_KIND_LABEL[i.post_diff_kind] : ''}{i.post_diff_note ? ` · ${i.post_diff_note}` : ''}</span></div><Link className="btn sm" to={`/distributors/${i.distributor_id}`}>Distributor</Link></div>)}
     </Card>}
     {posting && <PostedSheet invoice={posting} onClose={() => setPosting(null)} onSaved={() => { setPosting(null); useStore.getState().bump(); }} />}
     {reasoning && <UnpostedReasonSheet invoice={reasoning} day={day} onClose={() => setReasoning(null)} onSaved={() => { setReasoning(null); useStore.getState().bump(); }} />}

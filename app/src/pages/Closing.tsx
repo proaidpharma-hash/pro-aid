@@ -7,6 +7,7 @@ import * as api from '../lib/api';
 import { today, fmtDay, num, fmtDateTime } from '../lib/format';
 import type { ProofPhoto } from '../lib/photos';
 import { PostingCheck } from '../components/Posting';
+import { exportDayPdf } from '../lib/daypdf';
 
 // Daily closing: the app adds up what the drawer should hold; the manager counts; the difference is the control figure.
 export default function Closing() {
@@ -59,6 +60,7 @@ export default function Closing() {
   return (
     <>
       <TopBar title="Daily closing" sub={`${fmtDay(day)} · ${profile.role === 'cashier' ? 'view only' : profile.name}`} back right={<>
+        {closing && <Button onClick={() => exportDayPdf(day).catch((e: Error) => toast(e.message, 'danger'))} data-testid="day-pdf"><Icon.Download size={14} /> Day PDF</Button>}
         {bday?.status === 'approved' && <Pill kind="ok"><Icon.Lock size={12} /> Approved & locked</Pill>}
         {isOwner && bday?.status === 'closed' && <Button kind="primary" onClick={approve} disabled={busy} data-testid="approve-day">Approve & lock day</Button>}
         {isOwner && (bday?.status === 'approved' || bday?.status === 'closed') && <Button onClick={() => setUnlock(true)}>Unlock day…</Button>}

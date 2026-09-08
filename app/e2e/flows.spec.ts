@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { signIn, signOut, attachPhoto, toastSeen, selectByText, countNotes } from './helpers';
+import { signIn, signOut, attachPhoto, toastSeen, selectByText, countNotes, vis, expectSignedInAs } from './helpers';
 
 // One full pharmacy day, in the order it happens, across the three roles.
 // Each step exercises a rule the owner asked for. Tests run in order against one database.
@@ -81,7 +81,7 @@ test('cashier cannot see staff advances of others, can add an expense with recei
 
 test('cashier enters card/online receipts and a credit bill through the day', async ({ page }) => {
   await signIn(page, 'cashier');
-  await page.getByTestId('add-receipt').click();
+  await vis(page, 'add-receipt').click();
   await page.getByRole('radio', { name: /HBL card machine/ }).click();
   await page.fill('#receipt-amount', '1200');
   await attachPhoto(page);
@@ -95,7 +95,7 @@ test('cashier enters card/online receipts and a credit bill through the day', as
   await expect(page).toHaveURL(/\/$/);
   await expect(page.locator('.content')).toContainText('2 receipts');
   // a credit bill for a customer, whole bill on credit
-  await page.getByTestId('add-credit-bill').click();
+  await vis(page, 'add-credit-bill').click();
   await selectByText(page, '[data-testid="credit-who"]', 'Imran Butt');
   await page.getByTestId('credit-bill-no').fill('9001');
   await page.fill('#credit-bill-total', '700');
@@ -189,6 +189,9 @@ test('manager closes the day: expected cash computed, minus turns red, closing i
   await toastSeen(page, 'Closing submitted');
   await expect(page.getByTestId('difference')).toHaveText('+ Rs 940');
   await expect(page.locator('.content')).toContainText('Notes counted: 5000×22 · 1000×3 · 500×1 · 100×4 · 20×2');
+  const dayDl = page.waitForEvent('download');
+  await page.getByTestId('day-pdf').click();
+  expect((await dayDl).suggestedFilename()).toMatch(/ProAid-Day-sheet/);
   await expect(page.locator('.content')).toContainText('cannot be edited');
   await page.goto('/');
   await expect(page.locator('.content')).toContainText('1,13,940');
@@ -381,7 +384,7 @@ test('owner creates a new cashier login and the new user can sign in', async ({ 
   await page.fill('input[type="password"]', '445566');
   await page.click('button:has-text("Sign in")');
   await page.waitForURL(/\/$/);
-  await expect(page.locator('.sidebar')).toContainText('Cashier · Kashif');
+  await expectSignedInAs(page, 'Kashif Mehmood · cashier');
   // Kashif changes his own PIN (current PIN required)
   await page.goto('/pin');
   await page.getByTestId('pin-current').fill('000000');
@@ -408,7 +411,7 @@ test('owner creates a new cashier login and the new user can sign in', async ({ 
   await page.fill('input[type="password"]', '998877');
   await page.click('button:has-text("Sign in")');
   await page.waitForURL(/\/$/);
-  await expect(page.locator('.sidebar')).toContainText('Cashier · Kashif');
+  await expectSignedInAs(page, 'Kashif Mehmood · cashier');
 });
 
 test('count-first: manager counts the drawer and the app works the sale out, closing is prefilled', async ({ page }) => {

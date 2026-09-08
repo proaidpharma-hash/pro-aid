@@ -59,3 +59,10 @@ export async function countNotes(page: Page, total: number) {
   }
   await expect(page.getByTestId('denominations-total')).toHaveText(new Intl.NumberFormat('en-IN').format(total));
 }
+
+// the visible one of a control that exists in both the desktop and the phone layout
+export const vis = (page: Page, testId: string) => page.locator(`[data-testid="${testId}"], [data-testid="${testId}-m"]`).filter({ visible: true });
+export async function expectSignedInAs(page: Page, text: string) {
+  await page.goto('/more');
+  await expect(page.locator('.topbar')).toContainText(text);
+}

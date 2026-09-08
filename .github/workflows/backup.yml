@@ -1,0 +1,31 @@
+name: Nightly encrypted backup of the Pro Aid database
+on:
+  schedule:
+    - cron: '30 22 * * *'   # 03:30 Pakistan time, after the 1 am closing
+  workflow_dispatch: {}
+permissions:
+  contents: read
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Dump and encrypt (needs SUPABASE_DB_URL and BACKUP_PASSPHRASE secrets)
+        env:
+          DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+          PASS: ${{ secrets.BACKUP_PASSPHRASE }}
+        run: |
+          if [ -z "$DB_URL" ] || [ -z "$PASS" ]; then echo "::warning title=Backup skipped::set the SUPABASE_DB_URL and BACKUP_PASSPHRASE secrets to enable nightly backups"; exit 0; fi
+          sudo apt-get update -qq && sudo apt-get install -y -qq postgresql-client >/dev/null
+          set -o pipefail
+          name="proaid-$(date -u +%Y-%m-%d).sql.gz.enc"
+          pg_dump "$DB_URL" --schema=public --no-owner --no-privileges --data-only \
+            | gzip -9 | openssl enc -aes-256-cbc -pbkdf2 -iter 200000 -salt -pass env:PASS -out "$name"
+          ls -la "$name"
+          echo "BACKUP_NAME=$name" >> "$GITHUB_ENV"
+          echo "::notice title=Backup::$name written (data of every table, AES-256 encrypted; photos stay in Supabase Storage)"
+      - uses: actions/upload-artifact@v4
+        if: env.BACKUP_NAME != ''
+        with:
+          name: ${{ env.BACKUP_NAME }}
+          path: ${{ env.BACKUP_NAME }}
+          retention-days: 90

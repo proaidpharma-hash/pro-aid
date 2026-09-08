@@ -58,6 +58,14 @@ export default function Today() {
         </span>
       </>} />
       <div className="content">
+        <div className="phone-only grid grid-2">
+          <Link className="btn primary" to="/receipts/new" data-testid="add-receipt-m">+ Card / online</Link>
+          <Link className="btn" to="/credit/new" data-testid="add-credit-bill-m">+ Credit bill</Link>
+          <Link className="btn" to="/pay">+ Payment</Link>
+          <Link className="btn" to="/expenses/new">+ Expense</Link>
+          <Link className="btn" to="/purchases/new">+ Purchase</Link>
+          {profile.role !== 'cashier' && <Link className="btn" to="/sales/new">{sale ? 'Sale' : '+ Sale (night)'}</Link>}
+        </div>
         <div className="grid grid-4">
           <KPI label={sale ? 'POS system sale' : 'Card / online so far'} value={sale ? <Money v={sale.pos_total} /> : <Money v={data.nonCashSoFar} />} hint={sale ? `Cash ${num(posCash)} · Card/online ${num(sale.pos_total - sale.credit_total - (posCash ?? 0))} · Credit ${num(sale.credit_total)}` : `${data.receiptCount} receipt${data.receiptCount === 1 ? '' : 's'} · credit ${num(data.creditSoFar)} (${data.creditCount}) · sale not recorded yet`} />
           <KPI label={closing ? 'Cash counted in drawer' : 'Drawer should hold'} value={<Money v={closing ? closing.counted_cash : book.expected_cash} />} hint={closing ? `Expected ${num(closing.expected_cash)}` : `Opening ${num(book.opening_cash)} + sale cash − payouts`} kind={closing ? undefined : 'accent'} />
@@ -86,14 +94,6 @@ export default function Today() {
           </Card>
         </div>
         {isOwner && status === 'closed' && <Card kind="warn"><div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}><b>Closing submitted — review and approve to lock the day.</b><Link to="/closing" className="btn primary">Review closing</Link></div></Card>}
-        <div className="phone-only grid grid-2">
-          <Link className="btn primary" to="/receipts/new">+ Card / online</Link>
-          <Link className="btn" to="/credit/new">+ Credit bill</Link>
-          <Link className="btn" to="/pay">+ Payment</Link>
-          <Link className="btn" to="/expenses/new">+ Expense</Link>
-          <Link className="btn" to="/purchases/new">+ Purchase</Link>
-          {profile.role !== 'cashier' && <Link className="btn" to="/sales/new">{sale ? 'Sale' : '+ Sale (night)'}</Link>}
-        </div>
       </div>
     </>
   );

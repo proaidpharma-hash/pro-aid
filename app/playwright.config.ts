@@ -8,10 +8,11 @@ export default defineConfig({
   workers: 1,
   retries: 0,
   reporter: [['list']],
-  use: { baseURL: 'http://localhost:5174', trace: 'retain-on-failure', screenshot: 'only-on-failure', launchOptions: { executablePath: process.env.CHROMIUM_PATH || '/opt/pw-browsers/chromium' } },
+  use: { baseURL: 'http://localhost:5174', trace: 'retain-on-failure', screenshot: 'only-on-failure', launchOptions: process.env.CI ? {} : { executablePath: process.env.CHROMIUM_PATH || '/opt/pw-browsers/chromium' } },
   projects: [
     { name: 'desktop', use: { ...devices['Desktop Chrome'], viewport: { width: 1440, height: 900 } } },
-    { name: 'phone', use: { ...devices['Pixel 7'], viewport: { width: 390, height: 844 }, browserName: 'chromium' }, testMatch: /phone\.spec\.ts/ },
+    // the same flows on a phone (run as a separate invocation so the database is reset in between): npx playwright test --project=phone
+    { name: 'phone', use: { ...devices['Pixel 7'], viewport: { width: 390, height: 844 }, browserName: 'chromium' } },
   ],
   webServer: [
     { command: 'node ../tools/reset-dev-db.mjs proaid_test && PGDATABASE=proaid_test PORT=54322 STORAGE_DIR=/tmp/proaid-test-storage node ../tools/local-supabase.mjs', port: 54322, reuseExistingServer: false, timeout: 30_000 },

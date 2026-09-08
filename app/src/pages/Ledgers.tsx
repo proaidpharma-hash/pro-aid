@@ -78,7 +78,7 @@ export function DistributorDetail() {
           <div className="card kpi ok"><div className="label">Paid this month</div><div className="value num">{num(paidMonth)}</div></div>
         </div>
         {diffInvoices.length > 0 && <Card kind="danger" title={`They owe us · posting differences · ${num(diffPending)}`} right={<span className="help">paid in full, but less was posted in POS</span>}>
-          {diffInvoices.map((i) => <div className="row" key={i.id}><div className="grow"><span className="t">Inv {i.invoice_no} · invoice {num(i.amount)} · posted {num(i.posted_amount)}</span><span className="s">{i.post_diff_kind ? api.DIFF_KIND_LABEL[i.post_diff_kind] : ''}{i.post_diff_note ? ` · ${i.post_diff_note}` : ''}{i.diff_settled > 0 ? ` · ${num(i.diff_settled)} already settled` : ''}</span></div><span className="amt num danger">{num(i.diff_pending)}</span>{(profile.role === 'owner' || profile.role === 'manager') && <Button size="sm" kind="primary" onClick={() => setSettle(i)}>Settle…</Button>}</div>)}
+          {diffInvoices.map((i) => <div className="row wrap" key={i.id}><div className="grow"><span className="t">Inv {i.invoice_no} · invoice {num(i.amount)} · posted {num(i.posted_amount)}</span><span className="s">{i.post_diff_kind ? api.DIFF_KIND_LABEL[i.post_diff_kind] : ''}{i.post_diff_note ? ` · ${i.post_diff_note}` : ''}{i.diff_settled > 0 ? ` · ${num(i.diff_settled)} already settled` : ''}</span></div><span className="amt num danger">{num(i.diff_pending)}</span>{(profile.role === 'owner' || profile.role === 'manager') && <Button size="sm" kind="primary" onClick={() => setSettle(i)}>Settle…</Button>}</div>)}
         </Card>}
         <Card title="Ledger">
           {rows.length === 0 ? <Empty>No invoices yet</Empty> : rows.map((r, idx) => {

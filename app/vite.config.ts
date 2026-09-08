@@ -15,7 +15,7 @@ function csp(supabaseUrl: string) {
       const policy = [
         "default-src 'self'", "script-src 'self'", "style-src 'self' 'unsafe-inline'",
         `connect-src 'self' ${supa} ${ws}`, `img-src 'self' data: blob: ${supa}`, "font-src 'self' data:",
-        "object-src 'none'", "frame-ancestors 'none'", "base-uri 'self'", "form-action 'self'", "worker-src 'self'", "manifest-src 'self'",
+        "object-src 'none'", "base-uri 'self'", "form-action 'self'", "worker-src 'self'", "manifest-src 'self'",
       ].join('; ');
       return html.replace('<head>', `<head>\n    <meta http-equiv="Content-Security-Policy" content="${policy}">\n    <meta name="referrer" content="no-referrer">`);
     },

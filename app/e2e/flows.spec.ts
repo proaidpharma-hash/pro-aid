@@ -294,6 +294,24 @@ test('owner creates a new cashier login and the new user can sign in', async ({ 
   await expect(page.locator('table').first()).toContainText('staff · no login');
   await page.goto('/staff');
   await expect(page.locator('.content')).toContainText('Salman Helper');
+  // owner adds a new card machine; it shows up in the daily sale form straight away
+  await page.goto('/settings');
+  await page.getByRole('radio', { name: 'Accounts & wallets' }).click();
+  await page.getByTestId('add-account').click();
+  await page.getByTestId('account-name').fill('Meezan card machine');
+  await page.getByRole('radio', { name: 'Card machine' }).click();
+  await page.getByTestId('account-save').click();
+  await toastSeen(page, 'Meezan card machine added');
+  await expect(page.locator('.content')).toContainText('Meezan card machine');
+  await page.goto('/sales/new?day=2020-01-01');
+  await expect(page.locator('label:has-text("Meezan card machine")')).toBeVisible();
+  // audit log and days accept any date range
+  await page.goto('/settings');
+  await page.getByRole('radio', { name: 'Audit log' }).click();
+  await page.getByRole('radio', { name: 'Last year' }).click();
+  await expect(page.locator('.content')).toContainText('Audit log · everything that happened · 0');
+  await page.getByRole('radio', { name: 'This month' }).click();
+  await expect(page.locator('.content')).not.toContainText('happened · 0');
   await page.goto('/settings');
   await page.getByRole('button', { name: '+ Add login' }).click();
   await page.locator('.sheet input').nth(0).fill('Kashif Mehmood');

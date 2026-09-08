@@ -13,7 +13,7 @@ type State = {
   loadProfile: () => Promise<void>;
   loadNotifications: () => Promise<void>;
   toast: (text: string, kind?: Toast['kind']) => void;
-  bump: () => void;
+  bump: () => void; reloadAccounts: () => Promise<void>;
 };
 
 let toastId = 0;
@@ -48,6 +48,7 @@ export const useStore = create<State>((set, get) => ({
     setTimeout(() => set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) })), kind === 'danger' ? 6000 : 3500);
   },
   bump() { set((s) => ({ refreshKey: s.refreshKey + 1 })); },
+  async reloadAccounts() { try { set({ accounts: await api.listAccounts() }); } catch { /* offline */ } },
 }));
 
 export const useProfile = () => useStore((s) => s.profile);

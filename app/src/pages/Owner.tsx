@@ -9,7 +9,7 @@ import { createStaffLogin, isValidPhone, isValidPin } from '../lib/auth';
 import { SettleSheet } from './Ledgers';
 import { exportReportPdf } from '../lib/pdf';
 
-type RangeKey = 'today' | 'week' | '15' | 'month' | 'lastmonth' | 'custom';
+type RangeKey = 'today' | 'week' | '15' | 'month' | 'lastmonth' | 'year' | 'lastyear' | 'custom';
 export function useRange(initial: RangeKey = 'month') {
   const [key, setKey] = useState<RangeKey>(initial);
   const [from, setFrom] = useState(today());
@@ -22,11 +22,13 @@ export function useRange(initial: RangeKey = 'month') {
     if (key === '15') { const f = new Date(t); f.setDate(f.getDate() - 14); return { from: iso(f), to: today() }; }
     if (key === 'month') { const f = new Date(t); f.setDate(1); return { from: iso(f), to: today() }; }
     if (key === 'lastmonth') { const f = new Date(t.getFullYear(), t.getMonth() - 1, 1); const l = new Date(t.getFullYear(), t.getMonth(), 0); return { from: iso(f), to: iso(l) }; }
+    if (key === 'year') return { from: `${t.getFullYear()}-01-01`, to: today() };
+    if (key === 'lastyear') return { from: `${t.getFullYear() - 1}-01-01`, to: `${t.getFullYear() - 1}-12-31` };
     return { from, to };
   }, [key, from, to]);
   const picker = (
     <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-      <Chips options={[{ value: 'today', label: 'Today' }, { value: 'week', label: 'This week' }, { value: '15', label: 'Last 15 days' }, { value: 'month', label: 'This month' }, { value: 'lastmonth', label: 'Last month' }, { value: 'custom', label: 'Custom dates' }]} value={key} onChange={setKey} />
+      <Chips options={[{ value: 'today', label: 'Today' }, { value: 'week', label: 'This week' }, { value: '15', label: 'Last 15 days' }, { value: 'month', label: 'This month' }, { value: 'lastmonth', label: 'Last month' }, { value: 'year', label: 'This year' }, { value: 'lastyear', label: 'Last year' }, { value: 'custom', label: 'Custom dates' }]} value={key} onChange={setKey} />
       {key === 'custom' && <><input className="input" type="date" style={{ width: 160 }} value={from} onChange={(e) => setFrom(e.target.value)} /><span className="muted">→</span><input className="input" type="date" style={{ width: 160 }} value={to} onChange={(e) => setTo(e.target.value)} /></>}
     </div>
   );
@@ -219,10 +221,13 @@ export function SettingsPage() {
   const [dists, setDists] = useState<api.Distributor[]>([]);
   const [addUser, setAddUser] = useState(false);
   const [nu, setNu] = useState({ name: '', phone: '', pin: '', role: 'cashier' as 'cashier' | 'manager' | 'owner' });
+  const { range, picker } = useRange('month');
+  const [addAcc, setAddAcc] = useState(false);
+  const [na, setNa] = useState({ name: '', kind: 'wallet' as api.AccountKind, provider: '' });
   const [addStaff, setAddStaff] = useState(false);
   const [ns, setNs] = useState({ name: '', phone: '' });
   const [busy, setBusy] = useState(false);
-  useEffect(() => { if (!isOwner) return; const f = new Date(); f.setDate(f.getDate() - 60); Promise.all([api.listProfiles(), api.listDevices(), api.auditLog(200), api.listDays(f.toISOString().slice(0, 10), today()), api.listAllAccounts(), api.listDistributors()]).then(([p, d, a, bd, ac, ds]) => { setProfiles(p); setDevices(d); setAudit(a); setDays(bd); setAccounts(ac); setDists(ds); }).catch((e) => toast((e as Error).message, 'danger')); }, [isOwner, refreshKey, toast]);
+  useEffect(() => { if (!isOwner) return; Promise.all([api.listProfiles(), api.listDevices(), api.auditLog(range.from, range.to), api.listDays(range.from, range.to), api.listAllAccounts(), api.listDistributors()]).then(([p, d, a, bd, ac, ds]) => { setProfiles(p); setDevices(d); setAudit(a); setDays(bd); setAccounts(ac); setDists(ds); }).catch((e) => toast((e as Error).message, 'danger')); }, [isOwner, refreshKey, toast, range.from, range.to]);
   if (!isOwner) return <><TopBar title="Settings" /><div className="content"><Notice kind="warn">Owner only</Notice></div></>;
   const create = async () => {
     if (!nu.name.trim() || !isValidPhone(nu.phone) || !isValidPin(nu.pin)) return toast('Name, a valid phone and a 6-digit PIN are needed', 'danger');
@@ -235,6 +240,11 @@ export function SettingsPage() {
     try { await api.addStaffMember(ns.name.trim(), ns.phone.trim() || undefined); toast(`${ns.name} added — credit bills and advances can now go to their account`, 'ok'); setAddStaff(false); setNs({ name: '', phone: '' }); useStore.getState().bump(); } catch (e) { toast((e as Error).message, 'danger'); } finally { setBusy(false); }
   };
   const toggleActive = async (p: api.Profile) => { try { await api.upsertProfile({ id: p.id, name: p.name, role: p.role, phone: p.phone ?? '', active: !p.active }); useStore.getState().bump(); } catch (e) { toast((e as Error).message, 'danger'); } };
+  const createAccount = async () => {
+    if (!na.name.trim()) return toast('A name is needed', 'danger');
+    setBusy(true);
+    try { await api.addAccount({ name: na.name.trim(), kind: na.kind, provider: na.provider.trim() || null }); await useStore.getState().reloadAccounts(); toast(`${na.name} added — it now appears in the daily sale, payments and reports`, 'ok'); setAddAcc(false); setNa({ name: '', kind: 'wallet', provider: '' }); useStore.getState().bump(); } catch (e) { toast((e as Error).message, 'danger'); } finally { setBusy(false); }
+  };
   const toggleAccount = async (a: api.Account) => { try { const { supabase } = await import('../lib/supabase'); await supabase.from('accounts').update({ active: !a.active }).eq('id', a.id); useStore.getState().bump(); } catch (e) { toast((e as Error).message, 'danger'); } };
   const who = (id: string | null) => profiles.find((p) => p.id === id)?.name ?? '—';
   return (
@@ -253,11 +263,17 @@ export function SettingsPage() {
             </tbody></table></div>
           </Card>
         </div>}
-        {tab === 'accounts' && <Card title="Accounts & wallets" right={<span className="help">card machines, wallets, bank accounts</span>}>{accounts.map((a) => <div className="row" key={a.id}><div className="grow"><span className="t">{a.name}</span><span className="s">{a.kind.replace('_', ' ')}{a.provider ? ` · ${a.provider}` : ''}</span></div>{!['cash_drawer', 'owner_personal', 'waw_fs'].includes(a.kind) && <Button size="sm" onClick={() => toggleAccount(a)}>{a.active ? 'Disable' : 'Enable'}</Button>}</div>)}<div className="help">Need a new machine or wallet? Ask Claude to add it, or insert a row in the accounts table.</div></Card>}
+        {tab === 'accounts' && <Card title="Accounts & wallets" right={<Button kind="primary" size="sm" onClick={() => setAddAcc(true)} data-testid="add-account">+ Add account</Button>}>{accounts.map((a) => <div className="row" key={a.id}><div className="grow"><span className="t">{a.name}</span><span className="s">{a.kind.replace('_', ' ')}{a.provider ? ` · ${a.provider}` : ''}</span></div>{!['cash_drawer', 'owner_personal', 'waw_fs'].includes(a.kind) && <Button size="sm" onClick={() => toggleAccount(a)}>{a.active ? 'Disable' : 'Enable'}</Button>}</div>)}<div className="help">Disabled accounts keep their history but no longer appear in forms. Only the owner can add or disable accounts.</div></Card>}
         {tab === 'distributors' && <Card title="Distributors">{dists.map((d) => <div className="row" key={d.id}><div className="grow"><span className="t">{d.name}</span><span className="s">{[d.rep_name, d.phone, d.delivery_days].filter(Boolean).join(' · ') || 'no details'}{d.opening_balance > 0 ? ` · opening balance ${num(d.opening_balance)}` : ''}</span></div><Link className="btn sm" to={`/distributors/${d.id}`}>Open</Link></div>)}</Card>}
-        {tab === 'days' && <Card title="Days · last 60" right={<span className="help">approved days are locked</span>}>{days.map((d) => <div className="row" key={d.day}><div className="grow"><span className="t">{fmtDay(d.day)}</span><span className="s">opening {num(d.opening_cash)}{d.closed_at ? ` · closed by ${who(d.closed_by)}` : ''}{d.approved_at ? ` · approved by ${who(d.approved_by)} ${fmtDateTime(d.approved_at)}` : ''}</span></div>{d.status === 'approved' ? <Pill kind="ok"><Icon.Lock size={12} /> Locked</Pill> : d.status === 'closed' ? <Pill kind="warn">Awaiting approval</Pill> : <Pill kind="neutral">Open</Pill>}<Link className="btn sm" to={`/closing?day=${d.day}`}>Open</Link></div>)}</Card>}
-        {tab === 'audit' && <Card title="Audit log · everything that happened" right={<span className="help">latest 200</span>}><div className="scroll-x"><table className="table"><thead><tr><th>When</th><th>Who</th><th>What</th><th>Reason</th><th>Device</th></tr></thead><tbody>{audit.map((a) => <tr key={a.id}><td className="num" style={{ whiteSpace: 'nowrap' }}>{fmtDateTime(a.at)}</td><td>{who(a.user_id)}</td><td><b className={a.action === 'blocked' ? 'danger' : a.action === 'update' || a.action === 'delete' || a.action === 'unlock' ? 'warn' : ''}>{a.action}</b> {a.table_name}{a.action === 'update' && a.before && a.after ? <span className="muted"> · {diffSummary(a.before as Record<string, unknown>, a.after as Record<string, unknown>)}</span> : a.action === 'blocked' ? <span className="muted"> · {(a.after as { invoice_no?: string; attempted?: number })?.invoice_no} attempted {num((a.after as { attempted?: number })?.attempted ?? 0)}</span> : a.action === 'insert' ? <span className="muted"> · {num(Number((a.after as { amount?: number })?.amount ?? (a.after as { pos_total?: number })?.pos_total ?? (a.after as { counted_cash?: number })?.counted_cash ?? 0))}</span> : ''}</td><td>{a.reason}</td><td className="muted">{a.device}</td></tr>)}</tbody></table></div></Card>}
+        {tab === 'days' && <Card title={`Days · ${days.length}`} right={picker}>{days.length === 0 && <div className="muted">No days in this range</div>}{days.map((d) => <div className="row" key={d.day}><div className="grow"><span className="t">{fmtDay(d.day)}</span><span className="s">opening {num(d.opening_cash)}{d.closed_at ? ` · closed by ${who(d.closed_by)}` : ''}{d.approved_at ? ` · approved by ${who(d.approved_by)} ${fmtDateTime(d.approved_at)}` : ''}</span></div>{d.status === 'approved' ? <Pill kind="ok"><Icon.Lock size={12} /> Locked</Pill> : d.status === 'closed' ? <Pill kind="warn">Awaiting approval</Pill> : <Pill kind="neutral">Open</Pill>}<Link className="btn sm" to={`/closing?day=${d.day}`}>Open</Link></div>)}</Card>}
+        {tab === 'audit' && <Card title={`Audit log · everything that happened · ${audit.length}`} right={picker}><div className="scroll-x"><table className="table"><thead><tr><th>When</th><th>Who</th><th>What</th><th>Reason</th><th>Device</th></tr></thead><tbody>{audit.map((a) => <tr key={a.id}><td className="num" style={{ whiteSpace: 'nowrap' }}>{fmtDateTime(a.at)}</td><td>{who(a.user_id)}</td><td><b className={a.action === 'blocked' ? 'danger' : a.action === 'update' || a.action === 'delete' || a.action === 'unlock' ? 'warn' : ''}>{a.action}</b> {a.table_name}{a.action === 'update' && a.before && a.after ? <span className="muted"> · {diffSummary(a.before as Record<string, unknown>, a.after as Record<string, unknown>)}</span> : a.action === 'blocked' ? <span className="muted"> · {(a.after as { invoice_no?: string; attempted?: number })?.invoice_no} attempted {num((a.after as { attempted?: number })?.attempted ?? 0)}</span> : a.action === 'insert' ? <span className="muted"> · {num(Number((a.after as { amount?: number })?.amount ?? (a.after as { pos_total?: number })?.pos_total ?? (a.after as { counted_cash?: number })?.counted_cash ?? 0))}</span> : ''}</td><td>{a.reason}</td><td className="muted">{a.device}</td></tr>)}</tbody></table></div></Card>}
       </div>
+      {addAcc && <Sheet title="Add account / wallet / card machine" onClose={() => setAddAcc(false)}>
+        <Field label="Name (as it should appear in the app)"><input className="input" value={na.name} onChange={(e) => setNa({ ...na, name: e.target.value })} placeholder="e.g. Meezan card machine" data-testid="account-name" /></Field>
+        <Field label="Type"><Chips options={[{ value: 'card_machine', label: 'Card machine' }, { value: 'wallet', label: 'Wallet (EasyPaisa, JazzCash…)' }, { value: 'bank', label: 'Bank account' }]} value={na.kind} onChange={(v) => setNa({ ...na, kind: v })} /></Field>
+        <Field label="Bank / provider (optional)"><input className="input" value={na.provider} onChange={(e) => setNa({ ...na, provider: e.target.value })} placeholder="e.g. Meezan" /></Field>
+        <Button kind="primary" size="big" disabled={busy} onClick={createAccount} data-testid="account-save">Add account</Button>
+      </Sheet>}
       {addStaff && <Sheet title="Add staff member (no login)" onClose={() => setAddStaff(false)}>
         <Notice kind="info">For lower-level staff who don't use the app. Their medicine on credit and cash advances are tracked under Staff accounts.</Notice>
         <Field label="Name"><input className="input" value={ns.name} onChange={(e) => setNs({ ...ns, name: e.target.value })} data-testid="staff-name" /></Field>

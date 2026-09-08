@@ -63,6 +63,7 @@ export const touchDevice = (label: string, platform: string) => supabase.rpc('to
 
 // ---- reference --------------------------------------------------------------
 export const listAccounts = async () => must(await supabase.from('accounts').select('*').eq('active', true).order('sort_order')) as Account[];
+export const addAccount = async (a: { name: string; kind: AccountKind; provider: string | null }) => must(await supabase.from('accounts').insert({ ...a, sort_order: 50 }).select('*').single()) as Account;
 export const listAllAccounts = async () => must(await supabase.from('accounts').select('*').order('sort_order')) as Account[];
 export const listDistributors = async () => must(await supabase.from('distributors').select('*').eq('active', true).order('name')) as Distributor[];
 export const distributorBalances = async () => (must(await supabase.from('v_distributor_balance').select('*').order('pending', { ascending: false })) as DistributorBalance[]).map((d) => numify(d, ['pending', 'open_invoices']));
@@ -181,6 +182,9 @@ export const runDailyJobs = async () => must(await supabase.rpc('run_daily_jobs'
 // ---- owner corrections & audit ---------------------------------------------
 export const ownerEdit = async (table: string, id: string, patch: Record<string, unknown>, reason: string) => must(await supabase.rpc('owner_edit', { p_table: table, p_id: id, p_patch: patch, p_reason: reason }));
 export const ownerDelete = async (table: string, id: string, reason: string) => must(await supabase.rpc('owner_delete', { p_table: table, p_id: id, p_reason: reason }));
-export const auditLog = async (limit = 200) => must(await supabase.from('audit_log').select('*').order('at', { ascending: false }).limit(limit)) as AuditRow[];
+export const auditLog = async (from: string, to: string, limit = 2000) => {
+  const end = new Date(to); end.setDate(end.getDate() + 1);
+  return must(await supabase.from('audit_log').select('*').gte('at', `${from}T00:00:00`).lt('at', `${end.toISOString().slice(0, 10)}T00:00:00`).order('at', { ascending: false }).limit(limit)) as AuditRow[];
+};
 export const getPhoto = async (id: string) => (await supabase.from('photos').select('*').eq('id', id).maybeSingle()).data as Photo | null;
 export const getPhotos = async (ids: string[]) => (ids.length ? (must(await supabase.from('photos').select('*').in('id', ids)) as Photo[]) : []);

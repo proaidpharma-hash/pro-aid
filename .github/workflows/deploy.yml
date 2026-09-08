@@ -56,10 +56,12 @@ jobs:
         env:
           PGPASSWORD: postgres
         run: |
-          sudo apt-get install -y -qq postgresql-client >/dev/null
+          sudo apt-get update -qq >/dev/null && sudo apt-get install -y -qq postgresql-client >/dev/null
+          pg_isready -h localhost -p 5432 || (echo "::error title=e2e::postgres service not reachable"; exit 1)
           sed -i "s#host: '/tmp', port: 5433#host: 'localhost', port: 5432, password: 'postgres'#" ../tools/local-supabase.mjs ../tools/reset-dev-db.mjs
           sed -i "s#psql -h /tmp -p 5433 -U postgres#psql -h localhost -p 5432 -U postgres#" ../tools/reset-dev-db.mjs
-          npx playwright install --with-deps chromium >/dev/null
+          npx playwright install --with-deps chromium >/dev/null 2>&1 || (echo "::error title=e2e::playwright install failed"; exit 1)
+          node ../tools/reset-dev-db.mjs proaid_ci_check >/dev/null 2>&1 || (echo "::error title=e2e::database reset failed — $(node ../tools/reset-dev-db.mjs proaid_ci_check 2>&1 | tail -3 | tr '\n' ' ')"; exit 1)
           npx playwright test --project=desktop
           npx playwright test --project=phone
       - name: Build the web app

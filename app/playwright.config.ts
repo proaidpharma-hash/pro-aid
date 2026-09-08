@@ -7,7 +7,7 @@ export default defineConfig({
   fullyParallel: false,
   workers: 1,
   retries: 0,
-  reporter: [['list']],
+  reporter: process.env.CI ? [['list'], ['github']] : [['list']],
   use: { baseURL: 'http://localhost:5174', trace: 'retain-on-failure', screenshot: 'only-on-failure', launchOptions: process.env.CI ? {} : { executablePath: process.env.CHROMIUM_PATH || '/opt/pw-browsers/chromium' } },
   projects: [
     { name: 'desktop', use: { ...devices['Desktop Chrome'], viewport: { width: 1440, height: 900 } } },

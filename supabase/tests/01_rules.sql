@@ -345,3 +345,27 @@ select t_ok(cash_before_sale('2026-09-07') = 52800 + 0 - 27400 + 0 - (select coa
 select t_ok((select expected_cash from cash_book('2026-09-07')) = cash_before_sale('2026-09-07') + (select pos_cash_sale from cash_book('2026-09-07')), 'expected cash = cash before sale + cash sale');
 reset role;
 select 'ALL RULE TESTS PASSED (incl. staff & sale credit)' as result;
+
+-- ---------------------------------------------------------------------------
+-- 10. receipts through the day feed the sale
+-- ---------------------------------------------------------------------------
+set role app_user;
+select t_as(:cashier, 'cashier phone');
+insert into sale_receipts(day, account_id, amount, photo_id) values ('2026-09-12', (select id from accounts where name='HBL card machine'), 3000, t_photo(:cashier));
+insert into sale_receipts(day, account_id, amount, note, photo_id) values ('2026-09-12', (select id from accounts where name='EasyPaisa'), 1250, 'Rashid', t_photo(:cashier));
+insert into sale_receipts(day, account_id, amount, photo_id) values ('2026-09-12', (select id from accounts where name='HBL card machine'), 2000, t_photo(:cashier));
+select t_expect_error($q$ insert into sale_receipts(day, account_id, amount, photo_id) values ('2026-09-12', cash_drawer_id(), 100, t_photo('00000000-0000-0000-0000-000000000003')) $q$, 'PA004', 'a receipt cannot go to the cash drawer');
+select t_expect_error($q$ insert into sale_receipts(day, account_id, amount) values ('2026-09-12', (select id from accounts where name='HBL card machine'), 100) $q$, '23502', 'a receipt needs its photo');
+select t_ok((select amount from day_receipts('2026-09-12') where account_id = (select id from accounts where name='HBL card machine')) = 5000, 'receipts add up per account');
+select t_ok((select entered_by from sale_receipts limit 1) = :cashier and (select device from sale_receipts limit 1) = 'cashier phone', 'receipts are stamped with who and which device');
+select t_no_rows($q$ update sale_receipts set amount = 1 $q$, 'cashier cannot change a receipt');
+select t_as(:manager);
+insert into daily_sales(day, pos_total, credit_total, photo_id) values ('2026-09-12', 40000, 0, t_photo(:manager));
+select t_expect_error($q$ insert into daily_sale_lines(daily_sale_id, account_id, amount, photo_id) values ((select id from daily_sales where day='2026-09-12'), (select id from accounts where name='HBL card machine'), 5000, t_photo('00000000-0000-0000-0000-000000000002')) $q$, 'PA031', 'no end-of-day line on top of receipts for the same account');
+insert into daily_sale_lines(daily_sale_id, account_id, amount, photo_id) values ((select id from daily_sales where day='2026-09-12'), (select id from accounts where name='JazzCash'), 750, t_photo(:manager));
+select t_ok(sale_cash_part((select id from daily_sales where day='2026-09-12')) = 40000 - 5000 - 1250 - 750, 'cash part takes receipts and lines off the POS total');
+select t_expect_error($q$ insert into sale_receipts(day, account_id, amount, photo_id) values ('2026-09-12', (select id from accounts where name='HBL card machine'), 100, t_photo('00000000-0000-0000-0000-000000000002')) $q$, 'PA032', 'no receipts after the sale is recorded');
+select t_ok((select received from non_cash_pool('2026-09-12','2026-09-12') where account_name='HBL card machine') = 5000, 'non-cash pool counts receipts');
+select t_ok((select sum((x->>'amount')::numeric) from jsonb_array_elements(range_summary('2026-09-12','2026-09-12')->'by_account') x) = 7000, 'range summary by account counts receipts and lines');
+reset role;
+select 'ALL RULE TESTS PASSED (incl. receipts)' as result;

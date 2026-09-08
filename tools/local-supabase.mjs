@@ -12,6 +12,8 @@ import jwt from 'jsonwebtoken';
 const PORT = Number(process.env.PORT || 54321);
 const SECRET = 'local-dev-secret';
 const STORAGE_DIR = process.env.STORAGE_DIR || path.join(process.cwd(), '.storage');
+// dates come back as plain 'YYYY-MM-DD' strings, exactly like PostgREST
+pg.types.setTypeParser(1082, (v) => v);
 const pool = new pg.Pool({ host: '/tmp', port: 5433, user: 'postgres', database: process.env.PGDATABASE || 'proaid' });
 fs.mkdirSync(STORAGE_DIR, { recursive: true });
 
@@ -148,6 +150,7 @@ async function handleRest(req, res, url) {
     if (parts[0] === 'rpc') {
       const fn = parts[1];
       const body = req.method === 'POST' ? JSON.parse((await readBody(req)).toString() || '{}') : Object.fromEntries(params);
+      let setReturning = false;
       const rows = await withTx(req, async (c) => {
         const meta = await c.query(`select p.proretset, t.typname, t.typtype from pg_proc p join pg_type t on t.oid = p.prorettype where p.proname = $1 and p.pronamespace = 'public'::regnamespace limit 1`, [fn]);
         if (!meta.rowCount) throw Object.assign(new Error(`function ${fn} not found`), { code: 'PGRST202' });
@@ -155,12 +158,13 @@ async function handleRest(req, res, url) {
         const args = keys.map((k, i) => `${q(k)} := $${i + 1}`).join(', ');
         const vals = keys.map((k) => (body[k] !== null && typeof body[k] === 'object' && !Array.isArray(body[k]) ? JSON.stringify(body[k]) : body[k]));
         const { proretset, typname, typtype } = meta.rows[0];
+        setReturning = proretset;
         if (proretset) return (await c.query(`select * from ${q(fn)}(${args})`, vals)).rows;
         if (typtype === 'c') return [ (await c.query(`select to_jsonb(${q(fn)}(${args})) as v`, vals)).rows[0].v ];
         if (typname === 'void') { await c.query(`select ${q(fn)}(${args})`, vals); return [null]; }
         return [ (await c.query(`select ${q(fn)}(${args}) as v`, vals)).rows[0].v ];
       });
-      const meta2 = rows.length === 1 && !wantSingle ? rows[0] : rows;
+      const meta2 = rows.length === 1 && !wantSingle && !setReturning ? rows[0] : rows;
       return json(res, 200, meta2 === null ? undefined : meta2);
     }
     const table = parts[0];

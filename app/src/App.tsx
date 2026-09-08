@@ -5,7 +5,7 @@ import { Shell } from './components/Shell';
 import { Spinner, Toasts } from './components/ui';
 import Login from './pages/Login';
 import Today from './pages/Today';
-import { SaleNew, SalesPage } from './pages/Sale';
+import { SaleNew, SalesPage, ReceiptNew, CreditBillNew } from './pages/Sale';
 import Closing from './pages/Closing';
 import { PurchasesPage, PurchaseNew, PayPage, ExpenseNew, ExpensesPage } from './pages/Purchases';
 import { DistributorsPage, DistributorDetail, CustomersPage, StaffPage, StaffDetail, WawPage } from './pages/Ledgers';
@@ -35,6 +35,8 @@ export default function App() {
           <Route path="/" element={<Today />} />
           <Route path="/sales" element={<Guard roles={['owner', 'manager']}><SalesPage /></Guard>} />
           <Route path="/sales/new" element={<Guard roles={['owner', 'manager']}><SaleNew /></Guard>} />
+          <Route path="/receipts/new" element={<ReceiptNew />} />
+          <Route path="/credit/new" element={<CreditBillNew />} />
           <Route path="/closing" element={<Closing />} />
           <Route path="/purchases" element={<PurchasesPage />} />
           <Route path="/purchases/new" element={<PurchaseNew />} />

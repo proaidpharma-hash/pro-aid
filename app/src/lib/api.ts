@@ -12,6 +12,7 @@ export type CustomerBalance = { id: string; name: string; phone: string | null; 
 export type ExpenseCategory = { id: string; name: string; active: boolean; sort_order: number };
 export type BusinessDay = { day: string; opening_cash: number; status: 'open' | 'closed' | 'approved'; closed_by: string | null; closed_at: string | null; approved_by: string | null; approved_at: string | null };
 export type DailySale = { id: string; day: string; pos_total: number; credit_total: number; photo_id: string; pos_source: 'pos' | 'count'; counted_cash: number | null; entered_by: string; device: string | null; created_at: string };
+export type SaleReceipt = { id: string; day: string; account_id: string; amount: number; note: string | null; photo_id: string; entered_by: string; device: string | null; created_at: string };
 export type DailySaleLine = { id: string; daily_sale_id: string; account_id: string; amount: number; photo_id: string };
 export type Invoice = { id: string; distributor_id: string; invoice_no: string; invoice_date: string | null; day: string; amount: number; photo_id: string; posted_in_pos: boolean; posted_at: string | null; posted_by: string | null; installments_planned: number | null; next_due: string | null; note: string | null; entered_by: string; device: string | null; created_at: string };
 export type InvoiceStatus = Invoice & { paid: number; remaining: number; payments_made: number; distributor_name: string };
@@ -96,6 +97,10 @@ export async function saveDailySale(input: { day: string; pos_total: number; cre
   }
   return sale;
 }
+export const listReceipts = async (from: string, to: string) => (must(await supabase.from('sale_receipts').select('*').gte('day', from).lte('day', to).order('created_at', { ascending: false })) as SaleReceipt[]).map((r) => numify(r, ['amount']));
+export const addReceipt = async (r: { day: string; account_id: string; amount: number; note?: string | null; photo_id: string }) => must(await supabase.from('sale_receipts').insert(r).select('*').single()) as SaleReceipt;
+export const dayReceipts = async (day: string) => (must(await supabase.rpc('day_receipts', { d: day })) as { account_id: string; amount: number; receipts: number }[]).map((x) => ({ ...x, amount: n(x.amount) }));
+export const dayCredit = async (day: string) => { const rows = must(await supabase.rpc('day_credit', { d: day })) as { customer_credit: number; staff_credit: number; bills: number }[]; const r = Array.isArray(rows) ? rows[0] : rows; return { customer_credit: n(r.customer_credit), staff_credit: n(r.staff_credit), bills: Number(r.bills) }; };
 export const cashBeforeSale = async (day: string) => n(must(await supabase.rpc('cash_before_sale', { d: day })));
 export const getClosing = async (day: string) => { const c = (await supabase.from('closings').select('*').eq('day', day).maybeSingle()).data as Closing | null; return c ? numify(c, ['expected_cash', 'counted_cash', 'difference']) : null; };
 export const submitClosing = async (day: string, counted: number, photoId: string, note?: string) => numify(must(await supabase.rpc('submit_closing', { p_day: day, p_counted: counted, p_drawer_photo: photoId, p_note: note ?? null })) as Closing, ['expected_cash', 'counted_cash', 'difference']);
@@ -136,14 +141,14 @@ export const addExpense = async (e: { day: string; category_id: string; amount: 
 // ---- customer credit --------------------------------------------------------
 export const listCreditBills = async (customerId?: string) => { let q = supabase.from('customer_credit_bills').select('*').order('day', { ascending: false }); if (customerId) q = q.eq('customer_id', customerId); return (must(await q) as CreditBill[]).map((b) => numify(b, ['amount'])); };
 export const listCreditCollections = async (customerId?: string) => { let q = supabase.from('customer_credit_collections').select('*').order('day', { ascending: false }); if (customerId) q = q.eq('customer_id', customerId); return (must(await q) as CreditCollection[]).map((b) => numify(b, ['amount'])); };
-export const addCreditBill = async (b: { customer_id: string; day: string; bill_no: string; amount: number; photo_id: string }) => must(await supabase.from('customer_credit_bills').insert(b).select('*').single()) as CreditBill;
+export const addCreditBill = async (b: { customer_id: string; day: string; bill_no: string; amount: number; bill_total?: number | null; photo_id: string }) => must(await supabase.from('customer_credit_bills').insert(b).select('*').single()) as CreditBill;
 export const addCreditCollection = async (c: { customer_id: string; bill_id?: string | null; day: string; amount: number; account_id: string; photo_id: string }) => must(await supabase.from('customer_credit_collections').insert(c).select('*').single()) as CreditCollection;
 
 // ---- staff ------------------------------------------------------------------
 export const staffBalances = async () => (must(await supabase.from('v_staff_balance').select('*').order('name')) as StaffBalance[]).map((s) => numify(s, ['owed']));
-export const listStaffEntriesForSale = async (saleId: string) => (must(await supabase.from('staff_entries').select('*').eq('sale_id', saleId)) as StaffEntry[]).map((e) => numify(e, ['amount']));
+export const listStaffCreditForDay = async (day: string) => (must(await supabase.from('staff_entries').select('*').eq('day', day).eq('kind', 'medicine_credit')) as StaffEntry[]).map((e) => numify(e, ['amount']));
 export const listStaffEntries = async (staffId: string) => (must(await supabase.from('staff_entries').select('*').eq('staff_id', staffId).order('day', { ascending: false }).order('created_at', { ascending: false })) as StaffEntry[]).map((e) => numify(e, ['amount']));
-export const addStaffEntry = async (e: { staff_id: string; day: string; kind: StaffEntryKind; amount: number; bill_no?: string | null; note?: string | null; photo_id: string }) => must(await supabase.from('staff_entries').insert(e).select('*').single()) as StaffEntry;
+export const addStaffEntry = async (e: { staff_id: string; day: string; kind: StaffEntryKind; amount: number; bill_total?: number | null; bill_no?: string | null; note?: string | null; photo_id: string }) => must(await supabase.from('staff_entries').insert(e).select('*').single()) as StaffEntry;
 
 // ---- WAW F/S ----------------------------------------------------------------
 export const listWaw = async () => (must(await supabase.from('waw_loans').select('*').order('day', { ascending: false }).order('created_at', { ascending: false })) as WawLoan[]).map((w) => numify(w, ['amount']));

@@ -79,6 +79,32 @@ test('cashier cannot see staff advances of others, can add an expense with recei
   await expect(page).toHaveURL(/\/$/); // cashier bounced from owner-only pages
 });
 
+test('cashier enters card/online receipts and a credit bill through the day', async ({ page }) => {
+  await signIn(page, 'cashier');
+  await page.getByTestId('add-receipt').click();
+  await page.getByRole('radio', { name: /HBL card machine/ }).click();
+  await page.fill('#receipt-amount', '1200');
+  await attachPhoto(page);
+  await page.getByTestId('save-receipt-again').click();
+  await toastSeen(page, '1,200 on HBL card machine saved');
+  await page.getByRole('radio', { name: /HBL card machine/ }).click();
+  await page.fill('#receipt-amount', '2000');
+  await attachPhoto(page);
+  await page.getByTestId('save-receipt').click();
+  await toastSeen(page, '2,000 on HBL card machine saved');
+  await expect(page).toHaveURL(/\/$/);
+  await expect(page.locator('.content')).toContainText('2 receipts');
+  // a credit bill for a customer, whole bill on credit
+  await page.getByTestId('add-credit-bill').click();
+  await selectByText(page, '[data-testid="credit-who"]', 'Imran Butt');
+  await page.getByTestId('credit-bill-no').fill('9001');
+  await page.fill('#credit-bill-total', '700');
+  await attachPhoto(page);
+  await page.getByTestId('credit-add').click();
+  await toastSeen(page, '700 on credit for Imran Butt saved');
+  await expect(page.locator('.content')).toContainText('Imran Butt · bill 9001');
+});
+
 test('manager records the daily sale with slips and screenshots, cash part is worked out', async ({ page }) => {
   await signOut(page);
   await signIn(page, 'manager');
@@ -90,11 +116,11 @@ test('manager records the daily sale with slips and screenshots, cash part is wo
     await input.fill(v);
     await attachPhoto(page, nth);
   };
-  await line('HBL card machine', '3200', 1);
-  await line('UBL card machine', '2100', 2);
-  await line('Alfalah card machine', '1200', 3);
-  await line('EasyPaisa', '2500', 4);
-  await line('JazzCash', '1500', 5);
+  await expect(page.locator('[data-testid^="receipts-"]')).toContainText('3,200'); // HBL from the cashier's two receipts
+  await line('UBL card machine', '2100', 1);
+  await line('Alfalah card machine', '1200', 2);
+  await line('EasyPaisa', '2500', 3);
+  await line('JazzCash', '1500', 4);
   // credit: 2,500 of Rashid Ali's 4,000 bill goes on credit, with the bill photo
   await page.getByTestId('add-credit').click();
   await selectByText(page, '[data-testid="credit-who"]', 'Rashid Ali');
@@ -102,11 +128,11 @@ test('manager records the daily sale with slips and screenshots, cash part is wo
   await page.fill('#credit-bill-total', '4000');
   await page.getByRole('radio', { name: 'Part of it' }).click();
   await page.fill('#credit-amount', '2500');
-  await attachPhoto(page, 6);
+  await attachPhoto(page, 5);
   await page.getByTestId('credit-add').click();
-  await expect(page.getByTestId('credit-total')).toHaveText('2,500');
+  await expect(page.getByTestId('credit-total')).toHaveText('3,200'); // 700 entered through the day + 2,500
   await expect(page.locator('.content')).toContainText('1,500 paid now');
-  await expect(page.getByTestId('cash-part')).toHaveText('91,350');
+  await expect(page.getByTestId('cash-part')).toHaveText('90,650');
   await expect(page.locator('.notice.ok')).toContainText('matches POS');
   await page.getByTestId('save-sale').click();
   await toastSeen(page, 'Daily sale saved');
@@ -133,11 +159,11 @@ test('manager closes the day: expected cash computed, minus turns red, closing i
   await expect(page.locator('.content')).toContainText('owes 3,100'); // 2,500 from the sale + 1,800 − 1,200
 
   await page.goto('/closing');
-  // 52,800 + 91,350 + 1,200 − 27,400 − 4,250 = 1,13,700
-  await expect(page.getByTestId('expected-cash')).toHaveText('1,13,700');
-  await page.fill('#counted', '113000');
+  // 52,800 + 90,650 + 1,200 − 27,400 − 4,250 = 1,13,000
+  await expect(page.getByTestId('expected-cash')).toHaveText('1,13,000');
+  await page.fill('#counted', '112500');
   await expect(page.getByTestId('live-diff')).toContainText('MINUS');
-  await page.fill('#counted', '114640');
+  await page.fill('#counted', '113940');
   await expect(page.getByTestId('live-diff')).toContainText('Difference + 940');
   await expect(page.getByTestId('submit-closing')).toBeDisabled();
   await attachPhoto(page);
@@ -146,7 +172,7 @@ test('manager closes the day: expected cash computed, minus turns red, closing i
   await expect(page.getByTestId('difference')).toHaveText('+ Rs 940');
   await expect(page.locator('.content')).toContainText('cannot be edited');
   await page.goto('/');
-  await expect(page.locator('.content')).toContainText('1,14,640');
+  await expect(page.locator('.content')).toContainText('1,13,940');
   await expect(page.locator('.topbar')).toContainText('awaiting approval');
 });
 
@@ -266,9 +292,9 @@ test('owner corrects an expense with a reason; staff advance; WAW loan; reminder
   await expect(page.locator('.content')).toContainText('Owed to WAW F/S');
   // the day was unlocked earlier: close it again (owner may close) and approve
   await page.goto('/closing');
-  // expected: 1,13,700 + 2,750 (expense corrected 4,250→1,500) − 5,000 staff advance + 40,000 WAW − 5,000 repaid = 1,46,450
-  await expect(page.getByTestId('expected-cash')).toHaveText('1,46,450');
-  await page.fill('#counted', '147390');
+  // expected: 1,13,000 + 2,750 (expense corrected 4,250→1,500) − 5,000 staff advance + 40,000 WAW − 5,000 repaid = 1,45,750
+  await expect(page.getByTestId('expected-cash')).toHaveText('1,45,750');
+  await page.fill('#counted', '146690');
   await attachPhoto(page);
   await page.getByTestId('submit-closing').click();
   await toastSeen(page, /Closing submitted/);

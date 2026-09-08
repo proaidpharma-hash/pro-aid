@@ -4,7 +4,7 @@ import { TopBar } from '../components/Shell';
 import { Card, AmountInput, amountOf, PhotoPicker, Button, Notice, Icon, Spinner, Money, ProofLink, Pill, Tiles, Sheet, Field, Chips } from '../components/ui';
 import { useStore, useIsOwner } from '../lib/store';
 import * as api from '../lib/api';
-import { today, fmtDay, num, fmtShort } from '../lib/format';
+import { today, fmtDay, num, fmtShort, fmtTime } from '../lib/format';
 import type { ProofPhoto } from '../lib/photos';
 
 // Record the daily sale. Two ways in:
@@ -31,16 +31,25 @@ export function SaleNew() {
   const [credits, setCredits] = useState<CreditLine[]>([]);
   const [creditSheet, setCreditSheet] = useState(false);
   const [existing, setExisting] = useState<api.DailySale | null | undefined>(undefined);
+  const [receipts, setReceipts] = useState<Record<string, { amount: number; receipts: number }>>({});
+  const [dayCredit, setDayCredit] = useState({ customer_credit: 0, staff_credit: 0, bills: 0 });
   const [busy, setBusy] = useState(false);
-  useEffect(() => { api.getDailySale(day).then(setExisting); api.cashBeforeSale(day).then(setBefore).catch(() => setBefore(null)); }, [day]);
+  useEffect(() => {
+    api.getDailySale(day).then(setExisting);
+    api.cashBeforeSale(day).then(setBefore).catch(() => setBefore(null));
+    api.dayReceipts(day).then((rs) => setReceipts(Object.fromEntries(rs.map((r) => [r.account_id, { amount: r.amount, receipts: r.receipts }])))).catch(() => undefined);
+    api.dayCredit(day).then(setDayCredit).catch(() => undefined);
+  }, [day]);
 
-  const nonCashTotal = nonCash.reduce((s, a) => s + amountOf(lines[a.id]?.amount ?? ''), 0);
-  const creditTotal = credits.reduce((s, c) => s + c.amount, 0);
+  const receiptsTotal = Object.values(receipts).reduce((s, r) => s + r.amount, 0);
+  const nonCashTotal = nonCash.reduce((s, a) => s + (receipts[a.id] ? 0 : amountOf(lines[a.id]?.amount ?? '')), 0) + receiptsTotal;
+  const creditEarlier = dayCredit.customer_credit + dayCredit.staff_credit;
+  const creditTotal = creditEarlier + credits.reduce((s, c) => s + c.amount, 0);
   const countedN = amountOf(counted);
   const cashSaleFromCount = before === null ? 0 : countedN - before;
   const pos = mode === 'pos' ? amountOf(posTotal) : (counted === '' ? 0 : cashSaleFromCount + nonCashTotal + creditTotal);
   const cash = mode === 'pos' ? pos - nonCashTotal - creditTotal : cashSaleFromCount;
-  const missingPhotos = nonCash.filter((a) => amountOf(lines[a.id]?.amount ?? '') > 0 && !lines[a.id]?.photo);
+  const missingPhotos = nonCash.filter((a) => !receipts[a.id] && amountOf(lines[a.id]?.amount ?? '') > 0 && !lines[a.id]?.photo);
   const ready = mode === 'pos' ? pos > 0 : counted !== '' && before !== null;
   const canSave = ready && posPhoto && cash >= 0 && missingPhotos.length === 0 && !busy;
 
@@ -50,7 +59,7 @@ export function SaleNew() {
     try {
       await api.saveDailySale({
         day, pos_total: pos, credit_total: creditTotal, photo_id: posPhoto.id, pos_source: mode, counted_cash: mode === 'count' ? countedN : null,
-        lines: nonCash.filter((a) => amountOf(lines[a.id]?.amount ?? '') > 0).map((a) => ({ account_id: a.id, amount: amountOf(lines[a.id].amount), photo_id: lines[a.id].photo!.id })),
+        lines: nonCash.filter((a) => !receipts[a.id] && amountOf(lines[a.id]?.amount ?? '') > 0).map((a) => ({ account_id: a.id, amount: amountOf(lines[a.id].amount), photo_id: lines[a.id].photo!.id })),
         credits: credits.map((c) => ({ who: c.who, id: c.id, bill_no: c.bill_no, amount: c.amount, bill_total: c.bill_total, photo_id: c.photo.id })),
       });
       toast('Daily sale saved', 'ok');
@@ -83,7 +92,13 @@ export function SaleNew() {
           </Card>}
           <Card title="Card, online and credit">
             {mode === 'pos' && <div className="line"><span className="k accent" style={{ fontWeight: 800 }}>Cash (worked out automatically)</span><span className={`v num ${cash < 0 ? 'danger' : 'accent'}`} data-testid="cash-part">{num(cash)}</span></div>}
-            {nonCash.map((a) => (
+            {receiptsTotal > 0 && <div className="help">Card / online entered through the day are picked up automatically — {num(receiptsTotal)} so far.</div>}
+            {nonCash.map((a) => receipts[a.id] ? (
+              <div key={a.id} style={{ display: 'grid', gridTemplateColumns: '120px 1fr', gap: 8, alignItems: 'center', padding: '8px 0', borderTop: '1px solid var(--line-2)' }}>
+                <span style={{ fontSize: 13, fontWeight: 700 }}>{a.name}</span>
+                <span className="num" style={{ fontWeight: 800 }} data-testid={`receipts-${a.id}`}>{num(receipts[a.id].amount)} <span className="muted" style={{ fontWeight: 500, fontSize: 12 }}>· {receipts[a.id].receipts} receipt{receipts[a.id].receipts === 1 ? '' : 's'} entered today</span></span>
+              </div>
+            ) : (
               <div key={a.id} style={{ display: 'flex', flexDirection: 'column', gap: 6, padding: '8px 0', borderTop: '1px solid var(--line-2)' }}>
                 <div style={{ display: 'grid', gridTemplateColumns: '120px 1fr', gap: 8, alignItems: 'center' }}>
                   <label htmlFor={`line-${a.id}`} style={{ fontSize: 13, fontWeight: 700 }}>{a.name}</label>
@@ -93,7 +108,8 @@ export function SaleNew() {
               </div>
             ))}
             <div style={{ padding: '8px 0', borderTop: '1px solid var(--line-2)' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}><span className="warn" style={{ fontSize: 13, fontWeight: 700, flex: 1 }}>Credit bills · {credits.length}</span><span className="num warn" style={{ fontWeight: 800 }} data-testid="credit-total">{num(creditTotal)}</span><Button size="sm" onClick={() => setCreditSheet(true)} data-testid="add-credit">+ Add credit bill</Button></div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}><span className="warn" style={{ fontSize: 13, fontWeight: 700, flex: 1 }}>Credit bills · {dayCredit.bills + credits.length}</span><span className="num warn" style={{ fontWeight: 800 }} data-testid="credit-total">{num(creditTotal)}</span><Button size="sm" onClick={() => setCreditSheet(true)} data-testid="add-credit">+ Add credit bill</Button></div>
+              {dayCredit.bills > 0 && <div className="row"><div className="grow"><span className="t">Entered through the day</span><span className="s">{dayCredit.bills} bill{dayCredit.bills === 1 ? '' : 's'} · customers {num(dayCredit.customer_credit)} · staff {num(dayCredit.staff_credit)}</span></div><span className="amt num warn">{num(creditEarlier)}</span></div>}
               {credits.map((c) => <div className="row" key={c.key}><div className="grow"><span className="t">{c.name} <span className="muted" style={{ fontWeight: 500 }}>· {c.who === 'staff' ? 'staff' : 'customer'}</span></span><span className="s">Bill {c.bill_no}{c.bill_total !== null && c.bill_total > c.amount ? ` · ${num(c.bill_total)} bill, ${num(c.bill_total - c.amount)} paid now` : ' · full bill on credit'}</span></div><span className="amt num warn">{num(c.amount)}</span><Button kind="ghost" size="sm" aria-label="Remove" onClick={() => setCredits((l) => l.filter((x) => x.key !== c.key))}>✕</Button></div>)}
               <div className="help">Each credit bill goes straight into that customer's or staff member's account with its photo.</div>
             </div>
@@ -165,15 +181,16 @@ export function SalesPage() {
   const isOwner = useIsOwner();
   const [params, setParams] = useSearchParams();
   const day = params.get('day') || today();
-  const [data, setData] = useState<{ sale: api.DailySale | null; lines: api.DailySaleLine[]; bday: api.BusinessDay | null; closing: api.Closing | null; book: api.CashBook; bills: api.CreditBill[]; staffCredits: api.StaffEntry[]; staff: api.StaffBalance[]; collections: api.CreditCollection[]; customers: api.Customer[]; photos: api.Photo[] } | null>(null);
+  const [data, setData] = useState<{ sale: api.DailySale | null; lines: api.DailySaleLine[]; receipts: api.SaleReceipt[]; bday: api.BusinessDay | null; closing: api.Closing | null; book: api.CashBook; bills: api.CreditBill[]; staffCredits: api.StaffEntry[]; staff: api.StaffBalance[]; collections: api.CreditCollection[]; customers: api.Customer[]; photos: api.Photo[] } | null>(null);
   useEffect(() => {
     (async () => {
       const [sale, bday, closing, book, bills, collections, customers, staff] = await Promise.all([api.getDailySale(day), api.getDay(day), api.getClosing(day), api.cashBook(day), api.listCreditBills(), api.listCreditCollections(), api.listCustomers(), api.staffBalances().catch(() => [] as api.StaffBalance[])]);
       const lines = sale ? await api.getSaleLines(sale.id) : [];
-      const staffCredits = sale ? await api.listStaffEntriesForSale(sale.id).catch(() => [] as api.StaffEntry[]) : [];
+      const receipts = await api.listReceipts(day, day).catch(() => [] as api.SaleReceipt[]);
+      const staffCredits = await api.listStaffCreditForDay(day).catch(() => [] as api.StaffEntry[]);
       const dayBills = bills.filter((b) => b.day === day);
-      const photos = await api.getPhotos([...(sale ? [sale.photo_id] : []), ...lines.map((l) => l.photo_id), ...dayBills.map((b) => b.photo_id), ...staffCredits.map((e) => e.photo_id)]);
-      setData({ sale, lines, bday, closing, book, bills: dayBills, staffCredits, staff, collections: collections.filter((c) => c.day === day), customers, photos });
+      const photos = await api.getPhotos([...(sale ? [sale.photo_id] : []), ...lines.map((l) => l.photo_id), ...receipts.map((r) => r.photo_id), ...dayBills.map((b) => b.photo_id), ...staffCredits.map((e) => e.photo_id)]);
+      setData({ sale, lines, receipts, bday, closing, book, bills: dayBills, staffCredits, staff, collections: collections.filter((c) => c.day === day), customers, photos });
     })().catch((e) => useStore.getState().toast((e as Error).message, 'danger'));
   }, [day, refreshKey]);
   const shift = (n: number) => { const d = new Date(day); d.setDate(d.getDate() + n); setParams({ day: d.toISOString().slice(0, 10) }); };
@@ -182,8 +199,9 @@ export function SalesPage() {
   const acc = (id: string) => accounts.find((a) => a.id === id);
   const photo = (id: string) => data.photos.find((p) => p.id === id)?.storage_path;
   const cust = (id: string) => data.customers.find((c) => c.id === id)?.name ?? '';
-  const card = lines.filter((l) => acc(l.account_id)?.kind === 'card_machine');
-  const online = lines.filter((l) => acc(l.account_id)?.kind !== 'card_machine');
+  const all = [...lines.map((l) => ({ id: l.id, account_id: l.account_id, amount: l.amount, photo_id: l.photo_id, sub: 'End-of-day total', at: '' })), ...data.receipts.map((r) => ({ id: r.id, account_id: r.account_id, amount: r.amount, photo_id: r.photo_id, sub: `${r.note || 'Receipt'} · ${fmtTime(r.created_at)}`, at: r.created_at }))];
+  const card = all.filter((l) => acc(l.account_id)?.kind === 'card_machine');
+  const online = all.filter((l) => acc(l.account_id)?.kind !== 'card_machine');
   const sum = (xs: { amount: number }[]) => xs.reduce((s, x) => s + x.amount, 0);
   const staffName = (id: string) => data.staff.find((s) => s.id === id)?.name ?? 'Staff';
   const creditEntered = sum(data.bills) + sum(data.staffCredits);
@@ -201,17 +219,17 @@ export function SalesPage() {
             <div className="grid grid-5">
               <div className="kpi"><div className="label">{sale.pos_source === 'count' ? 'Day\'s sale (from drawer count)' : 'POS system total'}</div><div className="value num"><Money v={sale.pos_total} /></div><div className="hint"><ProofLink storagePath={photo(sale.photo_id)} label={sale.pos_source === 'count' ? 'Drawer photo' : 'POS photo'} /></div></div>
               <div className="kpi"><div className="label accent">Cash</div><div className="value num accent">{num(book.pos_cash_sale)}</div><div className="hint">goes to drawer</div></div>
-              <div className="kpi"><div className="label">Card machines</div><div className="value num">{num(sum(card))}</div><div className="hint">{card.length} slips attached</div></div>
+              <div className="kpi"><div className="label">Card machines</div><div className="value num">{num(sum(card))}</div><div className="hint">{card.length} slip{card.length === 1 ? '' : 's'} attached</div></div>
               <div className="kpi"><div className="label">Online received</div><div className="value num">{num(sum(online))}</div><div className="hint">{online.length} screenshots</div></div>
               <div className="kpi"><div className="label warn">Credit bills</div><div className="value num warn">{num(sale.credit_total)}</div><div className="hint">{data.bills.length + data.staffCredits.length} bills · pay later</div></div>
             </div>
           </Card>
           <div className="grid grid-3">
             <Card title="Card machines" right={<span className="num" style={{ fontWeight: 800 }}>{num(sum(card))}</span>}>
-              {card.length === 0 ? <div className="muted">None</div> : card.map((l) => <div className="row" key={l.id}><div className="grow"><span className="t">{acc(l.account_id)?.name}</span><span className="s">End-of-day slip</span></div><ProofLink storagePath={photo(l.photo_id)} /><span className="amt num">{num(l.amount)}</span></div>)}
+              {card.length === 0 ? <div className="muted">None</div> : card.map((l) => <div className="row" key={l.id}><div className="grow"><span className="t">{acc(l.account_id)?.name}</span><span className="s">{l.sub}</span></div><ProofLink storagePath={photo(l.photo_id)} /><span className="amt num">{num(l.amount)}</span></div>)}
             </Card>
             <Card title="Online received" right={<span className="num" style={{ fontWeight: 800 }}>{num(sum(online))}</span>}>
-              {online.length === 0 ? <div className="muted">None</div> : online.map((l) => <div className="row" key={l.id}><div className="grow"><span className="t">{acc(l.account_id)?.name}</span><span className="s">Screenshot</span></div><ProofLink storagePath={photo(l.photo_id)} /><span className="amt num">{num(l.amount)}</span></div>)}
+              {online.length === 0 ? <div className="muted">None</div> : online.map((l) => <div className="row" key={l.id}><div className="grow"><span className="t">{acc(l.account_id)?.name}</span><span className="s">{l.sub}</span></div><ProofLink storagePath={photo(l.photo_id)} /><span className="amt num">{num(l.amount)}</span></div>)}
             </Card>
             <Card title="Credit bills today" right={<span className="num warn" style={{ fontWeight: 800 }}>{num(sale.credit_total)}</span>}>
               {data.bills.map((b) => <div className="row" key={b.id}><div className="grow"><span className="t">{cust(b.customer_id)}</span><span className="s">Bill {b.bill_no}{b.bill_total !== null && b.bill_total > b.amount ? ` · of ${num(b.bill_total)}` : ''}</span></div><ProofLink storagePath={photo(b.photo_id)} /><span className="amt num">{num(b.amount)}</span></div>)}
@@ -232,6 +250,91 @@ export function SalesPage() {
         </>}
         <div className="help"><Icon.Info size={12} /> Every figure above links to the photo behind it. Corrections are owner-only, need a reason, and are kept in the audit log.</div>
       </div>
+    </>
+  );
+}
+
+// Card sale / online transfer entered as it happens (cashier, through the day)
+export function ReceiptNew() {
+  const profile = useStore((s) => s.profile)!;
+  const accounts = useStore((s) => s.accounts);
+  const toast = useStore((s) => s.toast);
+  const navigate = useNavigate();
+  const [params] = useSearchParams();
+  const day = params.get('day') || today();
+  const nonCash = useMemo(() => accounts.filter((a) => ['card_machine', 'wallet', 'bank'].includes(a.kind)), [accounts]);
+  const [accountId, setAccountId] = useState('');
+  const [amount, setAmount] = useState('');
+  const [note, setNote] = useState('');
+  const [photo, setPhoto] = useState<ProofPhoto | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [todayList, setTodayList] = useState<api.SaleReceipt[]>([]);
+  const refreshKey = useStore((s) => s.refreshKey);
+  useEffect(() => { api.listReceipts(day, day).then(setTodayList).catch(() => undefined); }, [day, refreshKey]);
+  const acc = accounts.find((a) => a.id === accountId);
+  const amt = amountOf(amount);
+  const canSave = accountId && amt > 0 && photo && !busy;
+  const save = async (again: boolean) => {
+    if (!canSave || !photo) return;
+    setBusy(true);
+    try {
+      await api.addReceipt({ day, account_id: accountId, amount: amt, note: note.trim() || null, photo_id: photo.id });
+      toast(`${num(amt)} on ${acc?.name} saved`, 'ok');
+      useStore.getState().bump();
+      if (again) { setAmount(''); setNote(''); setPhoto(null); } else navigate('/');
+    } catch (e) { toast((e as Error).message, 'danger'); } finally { setBusy(false); }
+  };
+  const total = todayList.reduce((s, r) => s + r.amount, 0);
+  return (
+    <>
+      <TopBar title="Card / online received" sub={`${fmtDay(day)} · ${profile.name}`} back />
+      <div className="content">
+        <div className="form">
+          <Card title="Which machine or wallet?">
+            <Tiles cols={2} options={nonCash.map((a) => ({ value: a.id, label: a.name, sub: a.kind === 'card_machine' ? 'card machine' : a.kind === 'wallet' ? 'wallet' : 'bank account' }))} value={accountId} onChange={setAccountId} />
+          </Card>
+          <Card>
+            <div className="card-title"><span>Amount</span><span className="danger" style={{ fontSize: 11 }}>photo required</span></div>
+            <AmountInput id="receipt-amount" value={amount} onChange={setAmount} />
+            <Field label="Customer / note (optional)"><input className="input" value={note} onChange={(e) => setNote(e.target.value)} placeholder="e.g. Imran Butt · bill 4482" /></Field>
+            <PhotoPicker label={acc?.kind === 'card_machine' ? 'Card slip (merchant copy)' : 'Transfer screenshot'} hint={acc?.kind === 'card_machine' ? 'Photo of the machine slip' : 'Screenshot showing the amount received'} value={photo} onChange={setPhoto} userId={profile.id} />
+          </Card>
+          <div className="form-footer" style={{ display: 'flex', gap: 8 }}>
+            <Button size="big" disabled={!canSave} onClick={() => save(true)} data-testid="save-receipt-again">Save & add another</Button>
+            <Button kind="primary" size="big" disabled={!canSave} onClick={() => save(false)} data-testid="save-receipt">{busy ? 'Saving…' : 'Save'}</Button>
+          </div>
+          {todayList.length > 0 && <Card title={`Entered today · ${todayList.length}`} right={<span className="num" style={{ fontWeight: 800 }}>{num(total)}</span>}>
+            {todayList.map((r) => <div className="row" key={r.id}><div className="grow"><span className="t">{accounts.find((a) => a.id === r.account_id)?.name}</span><span className="s">{r.note || '—'} · {fmtTime(r.created_at)}</span></div><span className="amt num">{num(r.amount)}</span></div>)}
+          </Card>}
+          <div className="help">At night the daily sale picks these totals up by itself — only the POS total and the drawer count are left to enter.</div>
+        </div>
+      </div>
+    </>
+  );
+}
+
+// A credit bill entered on its own during the day (goes straight to the customer's or staff member's account)
+export function CreditBillNew() {
+  const profile = useStore((s) => s.profile)!;
+  const toast = useStore((s) => s.toast);
+  const navigate = useNavigate();
+  const [params] = useSearchParams();
+  const day = params.get('day') || today();
+  const [saving, setSaving] = useState(false);
+  const save = async (c: CreditLine) => {
+    setSaving(true);
+    try {
+      if (c.who === 'customer') await api.addCreditBill({ customer_id: c.id, day, bill_no: c.bill_no, amount: c.amount, bill_total: c.bill_total, photo_id: c.photo.id });
+      else await api.addStaffEntry({ staff_id: c.id, day, kind: 'medicine_credit', amount: c.amount, bill_total: c.bill_total, bill_no: c.bill_no, photo_id: c.photo.id });
+      toast(`${num(c.amount)} on credit for ${c.name} saved`, 'ok');
+      useStore.getState().bump();
+      navigate('/');
+    } catch (e) { toast((e as Error).message, 'danger'); } finally { setSaving(false); }
+  };
+  return (
+    <>
+      <TopBar title="Credit bill" sub={`${fmtDay(day)} · ${profile.name}`} back />
+      <div className="content">{saving ? <Spinner /> : <CreditLineSheet userId={profile.id} onClose={() => navigate(-1)} onAdd={save} />}</div>
     </>
   );
 }

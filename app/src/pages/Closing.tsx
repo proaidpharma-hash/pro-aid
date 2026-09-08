@@ -15,7 +15,7 @@ export default function Closing() {
   const refreshKey = useStore((s) => s.refreshKey);
   const [params] = useSearchParams();
   const day = params.get('day') || today();
-  const [data, setData] = useState<{ sale: api.DailySale | null; lines: api.DailySaleLine[]; book: api.CashBook; closing: api.Closing | null; bday: api.BusinessDay | null; photos: api.Photo[]; recent: api.Closing[]; closedBy: string } | null>(null);
+  const [data, setData] = useState<{ sale: api.DailySale | null; lines: api.DailySaleLine[]; receipts: api.SaleReceipt[]; book: api.CashBook; closing: api.Closing | null; bday: api.BusinessDay | null; photos: api.Photo[]; recent: api.Closing[]; closedBy: string } | null>(null);
   const [counted, setCounted] = useState(params.get('counted') ?? '');
   const [photo, setPhoto] = useState<ProofPhoto | null>(null);
   const [note, setNote] = useState('');
@@ -26,10 +26,11 @@ export default function Closing() {
   const load = async () => {
     const [sale, book, closing, bday, profiles] = await Promise.all([api.getDailySale(day), api.cashBook(day), api.getClosing(day), api.getDay(day), api.listProfiles()]);
     const lines = sale ? await api.getSaleLines(sale.id) : [];
+    const receipts = await api.listReceipts(day, day).catch(() => [] as api.SaleReceipt[]);
     const from = new Date(day); from.setDate(from.getDate() - 7);
     const recent = await api.listClosings(from.toISOString().slice(0, 10), day);
     const photos = await api.getPhotos([...(closing ? [closing.drawer_photo_id] : []), ...(sale ? [sale.photo_id] : [])]);
-    setData({ sale, lines, book, closing, bday, photos, recent, closedBy: closing ? profiles.find((p) => p.id === closing.closed_by)?.name ?? '' : '' });
+    setData({ sale, lines, receipts, book, closing, bday, photos, recent, closedBy: closing ? profiles.find((p) => p.id === closing.closed_by)?.name ?? '' : '' });
     if (sale?.pos_source === 'count' && sale.counted_cash !== null && !closing) setCounted((c) => c || String(Math.round(sale.counted_cash!)));
   };
   useEffect(() => { load().catch((e) => toast((e as Error).message, 'danger')); }, [day, refreshKey]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -40,7 +41,7 @@ export default function Closing() {
   const diff = countedN - book.expected_cash;
   const avg = data.recent.filter((c) => c.day !== day).length ? data.recent.filter((c) => c.day !== day).reduce((s, c) => s + c.difference, 0) / data.recent.filter((c) => c.day !== day).length : null;
   const photoPath = (id: string) => data.photos.find((p) => p.id === id)?.storage_path;
-  const nonCash = data.lines.reduce((s, l) => s + l.amount, 0);
+  const nonCash = data.lines.reduce((s, l) => s + l.amount, 0) + data.receipts.reduce((s, r) => s + r.amount, 0);
 
   const submit = async () => {
     if (!photo || countedN < 0) return;

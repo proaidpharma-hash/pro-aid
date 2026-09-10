@@ -536,3 +536,28 @@ select t_expect_error($q$ select set_setting('telegram_chat_id', '1') $q$, '4250
 select t_ok((select count(*) from app_settings) = 0, 'manager cannot read settings');
 reset role;
 select 'ALL RULE TESTS PASSED (incl. control pack)' as result;
+
+-- ---------------------------------------------------------------------------
+-- 15. owner delete guards: attached entries are explained, never a raw foreign-key error
+select t_as(:owner);
+select t_expect_error($q$ select owner_delete('invoices', (select id from invoices where invoice_no='77002'), 'wrong digit') $q$, 'PA024', 'an invoice with payments cannot be deleted — told to delete the payments first');
+select t_expect_error($q$ select owner_delete('invoices', (select id from invoices where invoice_no='77001'), 'wrong digit') $q$, 'PA024', 'an invoice whose difference was adjusted by a later payment is protected');
+select t_expect_error($q$ select owner_delete('waw_loans', (select id from waw_loans where payment_id is not null and amount=2500), 'oops') $q$, 'PA024', 'a loan booked by a payment is deleted through the payment');
+-- deleting the WAW payment removes the loan it booked
+select set_config('t.waw_before', waw_outstanding()::text, false);
+select owner_delete('payments', (select id from payments where invoice_id=(select id from invoices where invoice_no='77002') and amount=2500), 'entered on the wrong invoice');
+select t_ok(waw_outstanding() = current_setting('t.waw_before')::numeric - 2500, 'deleting the WAW payment removes the booked loan');
+select t_ok((select count(*) from waw_loans where payment_id is not null and amount=2500) = 0, 'the booked loan is gone');
+-- deleting the adjustment payment reopens the difference on the source invoice
+select owner_delete('payments', (select id from payments where adjust_from_invoice_id=(select id from invoices where invoice_no='77001')), 'adjusted by mistake');
+select t_ok((select diff_pending from v_invoice_status where invoice_no='77001') = 1000, 'the adjusted difference is pending again');
+-- an invoice with no payments left deletes cleanly, taking its reminders with it
+select owner_delete('payments', (select id from payments where invoice_id=(select id from invoices where invoice_no='77002') and amount=1000), 'cleanup');
+select owner_delete('payments', (select id from payments where invoice_id=(select id from invoices where invoice_no='77002') and amount=1500), 'cleanup');
+select set_invoice_due((select id from invoices where invoice_no='77002'), '2026-09-25');
+select t_ok((select count(*) from reminders where invoice_id=(select id from invoices where invoice_no='77002')) >= 1, 'reminder exists before the delete');
+select owner_delete('invoices', (select id from invoices where invoice_no='77002'), 'wrong digit');
+select t_ok((select count(*) from invoices where invoice_no='77002') = 0 and (select count(*) from reminders where invoice_id is null or invoice_id not in (select id from invoices)) = 0, 'invoice deleted with its reminders');
+select t_ok((select count(*) from audit_log where action='delete' and table_name='invoices' and reason='wrong digit') = 1, 'the delete is in the audit log with its reason');
+reset role;
+select 'ALL RULE TESTS PASSED (incl. delete guards)' as result;

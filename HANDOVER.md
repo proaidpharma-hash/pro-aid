@@ -80,6 +80,7 @@ Numbered, **append-only** migrations. Never edit a file that has already been ap
 | 0009_security | execute grants, `is_api_request()`, `*_impl` wrappers, invoker views, storage folder rule, `reset_login_pin` |
 | 0010_multi_source_payments | payment notes, adjustment account, WAW auto-loan, due dates |
 | 0011_control_pack | viewer role, device alerts, duplicate-photo guard, budgets, spot counts, reconciliation, scorecard, settings, Telegram, digest, anomaly checks |
+| 0012_delete_guards | owner delete explains attached entries (PA024); deleting a payment removes the loan/settlement it booked |
 
 Conventions:
 - Public entry points are `security definer` functions; internal ones are `*_impl` (execute revoked from API roles). Entry points call `set_config('app.internal','1',true)` before internal work; `is_api_request()` tells whether the call came through PostgREST.
@@ -97,7 +98,7 @@ Conventions:
 - New sign-ups should be OFF in Supabase Auth settings (users are created by the owner inside the app).
 
 ### 3.4 CI/CD (`.github/workflows/`)
-- `deploy.yml` on push to `main`: **test-db** (182 SQL assertions) → **build** (tsc, vitest, Playwright e2e desktop + phone against the real rules) → **migrate** (applies new migrations to Supabase with `SUPABASE_DB_URL`) → **deploy** to GitHub Pages. If any step fails nothing goes live.
+- `deploy.yml` on push to `main`: **test-db** (192 SQL assertions) → **build** (tsc, vitest, Playwright e2e desktop + phone against the real rules) → **migrate** (applies new migrations to Supabase with `SUPABASE_DB_URL`) → **deploy** to GitHub Pages. If any step fails nothing goes live.
 - `backup.yml` nightly: `pg_dump` (client 17), AES-256 encrypted with `BACKUP_PASSPHRASE`, stored as a workflow artifact. Restore instructions: `supabase/BACKUP.md`.
 - `photo-backup.yml` monthly: `tools/photo-backup.mjs` downloads the `proofs` bucket, encrypted the same way.
 - Repo secrets (names only — values are held by the owner): `SUPABASE_DB_URL`, `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `BACKUP_PASSPHRASE`. The service-role key exists **only** as a GitHub secret.
@@ -154,6 +155,7 @@ Small operational changes need **no code**: users, roles, PIN resets, accounts/w
 
 | Code | Meaning |
 |---|---|
+| PA024 | delete refused: attached payments/settlements must go first |
 | PA001–PA023 | original rules (duplicate day, closed day, missing photo, wrong role…) — see `0002_api.sql` |
 | PA030 | staff/credit entry guard |
 | PA031/PA032 | receipt/credit guards on a closed day |

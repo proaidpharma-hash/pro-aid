@@ -66,6 +66,7 @@ function friendly(m: string) {
   if (/photos_sha256_unique/.test(m)) return 'This exact photo was already used as proof for another entry — take a fresh photo';
   if (/bank_settlements_account_id_day_key/.test(m)) return 'A settlement for this machine and day is already recorded';
   if (/row-level security/.test(m)) return 'You are not allowed to do that';
+  if (/violates foreign key constraint/.test(m)) return 'This entry is still referenced by another entry — delete that one first';
   return m;
 }
 const numify = <T extends Record<string, unknown>>(row: T, keys: (keyof T)[]): T => { const r = { ...row }; for (const k of keys) (r as Record<string, unknown>)[k as string] = n(r[k]); return r; };

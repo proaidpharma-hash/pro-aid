@@ -510,7 +510,7 @@ select t_as(:owner);
 select t_ok((select count(*) from notifications where user_id = :owner::uuid and title like 'Card settlement short · HBL%') = 1, 'owner alerted about the short settlement');
 -- scorecard
 select t_ok((select days_closed from staff_scorecard('2026-09-01','2026-09-30') where name='Bilal') >= 1 and (select minus_days from staff_scorecard('2026-09-01','2026-09-30') where name='Bilal') >= 0, 'scorecard counts closings per person');
-select t_ok((select blocked_attempts from staff_scorecard('2026-09-01','2026-09-30') where name='Ahmed') >= 1, 'scorecard counts blocked duplicate attempts');
+select t_ok((select blocked_attempts from staff_scorecard('2026-09-01', current_date) where name='Ahmed') >= 1, 'scorecard counts blocked duplicate attempts');
 -- digest and anomalies
 -- a closing that matches to the rupee on 2026-09-16
 select t_as(:manager);
@@ -561,3 +561,17 @@ select t_ok((select count(*) from invoices where invoice_no='77002') = 0 and (se
 select t_ok((select count(*) from audit_log where action='delete' and table_name='invoices' and reason='wrong digit') = 1, 'the delete is in the audit log with its reason');
 reset role;
 select 'ALL RULE TESTS PASSED (incl. delete guards)' as result;
+
+-- ---------------------------------------------------------------------------
+-- 16. security advisor: migrations table locked, every function has a search_path, anon/trigger execute removed
+select t_ok((select relrowsecurity from pg_class where oid = 'public._migrations'::regclass), '_migrations has row-level security');
+select t_ok(not has_table_privilege('anon', 'public._migrations', 'select') and not has_table_privilege('authenticated', 'public._migrations', 'select'), 'API roles cannot read _migrations');
+select t_ok((select count(*) from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'public' and p.prokind = 'f' and p.proname not like 't\_%'
+             and not exists (select 1 from unnest(coalesce(p.proconfig, '{}')) c where c like 'search_path=%')) = 0, 'every public function has a fixed search_path');
+select t_ok((select count(*) from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'public' and p.prokind = 'f'
+             and has_function_privilege('anon', p.oid, 'execute') and p.proname not in ('setup_needed', 'upsert_profile') and p.proname not like 't\_%') = 0, 'anon can call nothing but the first-run functions');
+select t_ok((select count(*) from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'public' and p.prorettype = 'trigger'::regtype
+             and has_function_privilege('authenticated', p.oid, 'execute')) = 0, 'trigger functions are not callable through the API');
+select t_ok(not has_function_privilege('authenticated', 'run_anomaly_checks(date)', 'execute'), 'anomaly checks run only from the scheduler');
+select t_ok(has_function_privilege('authenticated', 'record_payment(uuid, date, numeric, uuid, cash_source, uuid, uuid, text, uuid)', 'execute') and has_function_privilege('authenticated', 'submit_closing(date, numeric, uuid, text, jsonb)', 'execute'), 'signed-in users still reach the entry points');
+select 'ALL RULE TESTS PASSED (incl. security advisor)' as result;

@@ -65,7 +65,7 @@ GitHub Actions ── tests → migrations → GitHub Pages deploy
 - Env vars: `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY` (`.env.production` = real project; `.env.development` = local stand-in). `VITE_BASE=/pro-aid/` is set by CI for GitHub Pages.
 
 ### 3.2 Database (`supabase/migrations/`)
-Numbered, **append-only** migrations. Never edit a file that has already been applied; add `0012_....sql`. CI applies each file once and records it in `public._migrations`.
+Numbered, **append-only** migrations. Never edit a file that has already been applied; add `0014_....sql`. CI applies each file once and records it in `public._migrations`.
 
 | File | Contents |
 |---|---|
@@ -81,13 +81,15 @@ Numbered, **append-only** migrations. Never edit a file that has already been ap
 | 0010_multi_source_payments | payment notes, adjustment account, WAW auto-loan, due dates |
 | 0011_control_pack | viewer role, device alerts, duplicate-photo guard, budgets, spot counts, reconciliation, scorecard, settings, Telegram, digest, anomaly checks |
 | 0012_delete_guards | owner delete explains attached entries (PA024); deleting a payment removes the loan/settlement it booked |
+| 0013_security_advisor | Supabase Security Advisor clean-up: RLS on `_migrations`, fixed `search_path` on every function, no anon/trigger/internal EXECUTE |
 
 Conventions:
 - Public entry points are `security definer` functions; internal ones are `*_impl` (execute revoked from API roles). Entry points call `set_config('app.internal','1',true)` before internal work; `is_api_request()` tells whether the call came through PostgREST.
 - Errors: `raise exception '<message>' using errcode = 'PA0xx'` (see table in Section 6). The message text is what the user sees.
 - Enum values added with `alter type … add value` must be referenced via `::text` casts in the same migration.
 - Views use `security_invoker = true`. Drop and recreate a view when its columns change.
-- Every table has RLS; the audit trigger writes `audit_log` on all edits.
+- Every table has RLS (including `public._migrations`); the audit trigger writes `audit_log` on all edits.
+- Every function sets `search_path = public`; trigger functions and internal helpers have no EXECUTE for API roles. The Supabase dashboard *Advisors → Security* page should stay at 0 errors; the remaining "signed-in users can execute SECURITY DEFINER function" notes on the RPC entry points are by design (they check the caller's role inside).
 - `notify_users(...)` creates notifications; owner-alert kinds are also sent to Telegram (`send_telegram`, pg_net; no-op locally).
 - Daily jobs: `run_daily_jobs()` (reminders, anomaly checks, yesterday's digest) — scheduled by pg_cron in production.
 
@@ -98,7 +100,7 @@ Conventions:
 - New sign-ups should be OFF in Supabase Auth settings (users are created by the owner inside the app).
 
 ### 3.4 CI/CD (`.github/workflows/`)
-- `deploy.yml` on push to `main`: **test-db** (192 SQL assertions) → **build** (tsc, vitest, Playwright e2e desktop + phone against the real rules) → **migrate** (applies new migrations to Supabase with `SUPABASE_DB_URL`) → **deploy** to GitHub Pages. If any step fails nothing goes live.
+- `deploy.yml` on push to `main`: **test-db** (200 SQL assertions) → **build** (tsc, vitest, Playwright e2e desktop + phone against the real rules) → **migrate** (applies new migrations to Supabase with `SUPABASE_DB_URL`) → **deploy** to GitHub Pages. If any step fails nothing goes live.
 - `backup.yml` nightly: `pg_dump` (client 17), AES-256 encrypted with `BACKUP_PASSPHRASE`, stored as a workflow artifact. Restore instructions: `supabase/BACKUP.md`.
 - `photo-backup.yml` monthly: `tools/photo-backup.mjs` downloads the `proofs` bucket, encrypted the same way.
 - Repo secrets (names only — values are held by the owner): `SUPABASE_DB_URL`, `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `BACKUP_PASSPHRASE`. The service-role key exists **only** as a GitHub secret.
@@ -139,7 +141,7 @@ Dev users (local only): owner `03001234567` / PIN `112233`, manager `03002345678
 ## 5. How to make a change (checklist)
 
 1. **Decide where the rule lives.** Anything that must be enforced (who may do what, arithmetic, blocking conditions) goes in a new migration; the app only presents it.
-2. **Database:** create `supabase/migrations/0012_<name>.sql`. Add it to the file lists in `supabase/run_tests.sh` and `tools/reset-dev-db.mjs`. Add tests to `supabase/tests/01_rules.sql` (pattern: `t_as('<user>')` then `select ok(...)` / expect a `PA0xx` error). Run `bash run_tests.sh`.
+2. **Database:** create `supabase/migrations/0014_<name>.sql`. Add it to the file lists in `supabase/run_tests.sh` and `tools/reset-dev-db.mjs`. Add tests to `supabase/tests/01_rules.sql` (pattern: `t_as('<user>')` then `select ok(...)` / expect a `PA0xx` error). Run `bash run_tests.sh`.
 3. **API layer:** add the typed call in `app/src/lib/api.ts` (and the friendly message for any new error code).
 4. **UI:** edit the page/component. Respect `useCanWrite()` for anything that writes; keep phone layout working (390 px wide — use `.row.wrap`, `grid-2.stack`).
 5. **Tests:** extend `app/e2e/flows.spec.ts` (serial, uses `helpers.ts`: `signIn`, `attachPhoto`, `countNotes`…). Run desktop and phone projects.

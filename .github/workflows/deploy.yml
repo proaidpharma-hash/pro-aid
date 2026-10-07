@@ -88,7 +88,7 @@ jobs:
           fail() { echo "::error title=Migration failed::$1"; exit 1; }
           if ! out=$(psql "$DB_URL" -Atc "select current_user" 2>&1); then fail "Cannot connect to Supabase: ${out:0:300}"; fi
           echo "connected as $out"
-          psql "$DB_URL" -v ON_ERROR_STOP=1 -c "create table if not exists public._migrations(name text primary key, applied_at timestamptz default now())" >/dev/null || fail "could not create _migrations table"
+          psql "$DB_URL" -v ON_ERROR_STOP=1 -c "create table if not exists public._migrations(name text primary key, applied_at timestamptz default now()); alter table public._migrations enable row level security; revoke all on table public._migrations from public, anon, authenticated" >/dev/null || fail "could not create _migrations table"
           for f in supabase/migrations/*.sql; do
             name=$(basename "$f")
             if psql "$DB_URL" -Atc "select 1 from public._migrations where name='$name'" | grep -q 1; then echo "skip $name"; continue; fi
